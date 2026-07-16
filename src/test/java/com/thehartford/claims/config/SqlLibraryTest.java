@@ -20,8 +20,11 @@ class SqlLibraryTest {
     }
 
     @Test
-    void orgChartQueryUsesConnectBy() {
-        assertTrue(lib.get("agent_org_chart").toUpperCase().contains("CONNECT BY"));
+    void orgChartQueryUsesRecursiveCte() {
+        // Migrated from Oracle CONNECT BY to a Snowflake WITH RECURSIVE CTE.
+        String orgChart = lib.get("agent_org_chart").toUpperCase();
+        assertTrue(orgChart.contains("WITH RECURSIVE"));
+        assertTrue(!orgChart.contains("CONNECT BY"));
     }
 
     @Test
