@@ -21,7 +21,8 @@ TABLES=(customer agent policy claim claim_payment)
 
 for t in "${TABLES[@]}"; do
   echo "Exporting hartford.${t} ..."
-  sqlplus -s "${DB_USER}/${ORACLE_APP_PASSWORD}@${DB_TNS}" <<SQL
+  sqlplus -s /nolog <<SQL
+    CONNECT ${DB_USER}/${ORACLE_APP_PASSWORD}@${DB_TNS}
     SET PAGESIZE 0
     SET FEEDBACK OFF
     SET COLSEP '|'
