@@ -14,12 +14,15 @@ INSERT INTO hartford.agent (agent_id, agent_name, manager_id, region_code, hire_
 VALUES (22, 'Priya Nair',    20,   'NE', TO_DATE('2018-09-10','YYYY-MM-DD'));
 
 -- Customers (let the trigger assign customer_id from the sequence)
+-- NOTE: `ssn` uses obviously-fake, non-SSN-shaped placeholders on purpose. Do not
+-- commit real or SSN-formatted values here; load real seed PII from an out-of-tree
+-- fixture and apply column-level encryption/masking if this path ever seeds real data.
 INSERT INTO hartford.customer (first_name, last_name, ssn, date_of_birth, email, phone, risk_score, lifetime_premium)
-VALUES ('Alice',  'Johnson', '111-22-3333', TO_DATE('1980-04-12','YYYY-MM-DD'), 'alice.j@example.com',  '860-555-0101', 0.42, 12400.00);
+VALUES ('Alice',  'Johnson', 'TEST-000001', TO_DATE('1980-04-12','YYYY-MM-DD'), 'alice.j@example.com',  '860-555-0101', 0.42, 12400.00);
 INSERT INTO hartford.customer (first_name, last_name, ssn, date_of_birth, email, phone, risk_score, lifetime_premium)
-VALUES ('Robert', 'Smith',   '222-33-4444', TO_DATE('1975-11-30','YYYY-MM-DD'), 'rsmith@example.com',   '860-555-0102', 0.78, 8800.00);
+VALUES ('Robert', 'Smith',   'TEST-000002', TO_DATE('1975-11-30','YYYY-MM-DD'), 'rsmith@example.com',   '860-555-0102', 0.78, 8800.00);
 INSERT INTO hartford.customer (first_name, last_name, ssn, date_of_birth, email, phone, risk_score, lifetime_premium)
-VALUES ('Maria',  'Garcia',  '333-44-5555', TO_DATE('1990-07-08','YYYY-MM-DD'), 'mgarcia@example.com',  '860-555-0103', 0.31, 4200.00);
+VALUES ('Maria',  'Garcia',  'TEST-000003', TO_DATE('1990-07-08','YYYY-MM-DD'), 'mgarcia@example.com',  '860-555-0103', 0.31, 4200.00);
 
 -- Policies (trigger assigns policy_id)
 INSERT INTO hartford.policy (policy_number, customer_id, agent_id, product_code, status, effective_date, expiration_date, annual_premium, coverage_limit, deductible)
