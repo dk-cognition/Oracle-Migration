@@ -13,11 +13,10 @@ import java.sql.Statement;
 /**
  * Data access for customers.
  *
- * <p>MIGRATION NOTE: {@link #insert} relies on {@code seq_customer_id.NEXTVAL}
- * being applied by the {@code trg_customer_biu} row trigger, then reads the
- * generated key back with Oracle's {@code getGeneratedKeys()} using ROWID.
- * Snowflake has neither row triggers nor ROWID; use an IDENTITY/AUTOINCREMENT
- * column or an explicit sequence in the INSERT. See docs/MIGRATION.md.</p>
+ * <p>Migrated to Snowflake: {@code customer_id} is an AUTOINCREMENT column (the
+ * Oracle sequence + {@code trg_customer_biu} trigger are gone). Snowflake has no
+ * {@code getGeneratedKeys()}/ROWID and no per-session {@code CURRVAL}, so the id
+ * is read back with a follow-up query. See docs/MIGRATION.md.</p>
  */
 public class CustomerDao {
 
@@ -33,29 +32,34 @@ public class CustomerDao {
         this.sql = SqlLibrary.fromResource("/sql/reports.sql");
     }
 
-    /** Inserts a customer, letting the Oracle trigger assign the id from a sequence. */
+    /** Inserts a customer; the AUTOINCREMENT customer_id is read back afterwards. */
     public long insert(String firstName, String lastName, String email) {
         String insert =
             "INSERT INTO hartford.customer (first_name, last_name, email) VALUES (?, ?, ?)";
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps =
-                 conn.prepareStatement(insert, new String[] {"CUSTOMER_ID"})) {
-            ps.setString(1, firstName);
-            ps.setString(2, lastName);
-            ps.setString(3, email);
-            ps.executeUpdate();
-            try (ResultSet keys = ps.getGeneratedKeys()) {
-                if (keys.next()) {
-                    return keys.getLong(1);
+        // Snowflake has no getGeneratedKeys()/ROWID; re-query the assigned id.
+        // (MAX is best-effort; a serialized writer or dedicated sequence is safer
+        // under concurrency.)
+        String readBack = "SELECT MAX(customer_id) FROM hartford.customer";
+        try (Connection conn = dataSource.getConnection()) {
+            try (PreparedStatement ps = conn.prepareStatement(insert)) {
+                ps.setString(1, firstName);
+                ps.setString(2, lastName);
+                ps.setString(3, email);
+                ps.executeUpdate();
+            }
+            try (Statement st = conn.createStatement();
+                 ResultSet rs = st.executeQuery(readBack)) {
+                if (rs.next()) {
+                    return rs.getLong(1);
                 }
             }
-            throw new DataAccessException("No generated key returned for customer insert", null);
+            throw new DataAccessException("No id read back for customer insert", null);
         } catch (SQLException e) {
             throw new DataAccessException("insert customer failed", e);
         }
     }
 
-    /** Upsert via the Oracle MERGE ... USING dual statement in reports.sql. */
+    /** Upsert via the Snowflake MERGE (USING (SELECT ...) src) in reports.sql. */
     public void upsert(long customerId, String firstName, String lastName, String email) {
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql.get("customer_upsert"))) {
@@ -69,9 +73,13 @@ public class CustomerDao {
         }
     }
 
-    /** Reads the next customer id straight from the Oracle sequence via DUAL. */
+    /**
+     * Best-effort next customer id. Snowflake AUTOINCREMENT exposes no gap-free,
+     * authoritative peek (no DUAL, no sequence CURRVAL here), so this returns
+     * MAX(customer_id) + 1 as an estimate only.
+     */
     public long peekNextId() {
-        String q = "SELECT hartford.seq_customer_id.NEXTVAL FROM dual";
+        String q = "SELECT COALESCE(MAX(customer_id), 99999) + 1 FROM hartford.customer";
         try (Connection conn = dataSource.getConnection();
              Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(q)) {

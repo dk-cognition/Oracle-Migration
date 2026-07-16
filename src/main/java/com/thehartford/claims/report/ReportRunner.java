@@ -15,9 +15,9 @@ import java.sql.Statement;
  * Executes the named reporting queries from {@code sql/reports.sql} and prints
  * them as a simple tab-delimited grid.
  *
- * <p>MIGRATION NOTE: every query this runner executes contains Oracle-only SQL
- * (CONNECT BY, ROWNUM, (+), DECODE, NVL2, ADD_MONTHS, SYS_CONNECT_BY_PATH).
- * They will fail verbatim on Snowflake. See docs/MIGRATION.md for rewrites.</p>
+ * <p>The queries in {@code sql/reports.sql} have been migrated to Snowflake
+ * (WITH RECURSIVE, QUALIFY, ANSI joins, DATEADD, TO_VARCHAR, IFF). See
+ * docs/MIGRATION.md for the Oracle → Snowflake mapping.</p>
  */
 public class ReportRunner {
 
