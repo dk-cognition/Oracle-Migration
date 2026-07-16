@@ -1,0 +1,9 @@
+target/
+*.class
+*.log
+velocity.log
+*.psv
+extract/
+.idea/
+*.iml
+.DS_Store
