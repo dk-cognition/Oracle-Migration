@@ -65,9 +65,17 @@ USING (SELECT :1 AS customer_id, :2 AS first_name, :3 AS last_name, :4 AS email 
 
 -- name: high_risk_customers
 -- Analytic function + NVL2 + regexp. Ports mostly cleanly but NVL2 => IFF/CASE.
+-- DATA GOVERNANCE: ReportRunner prints this result set to stdout/logs, which can
+-- be read by a broader audience than the database (ops, log pipeline). Do NOT
+-- expose raw customer names or the raw underwriting risk_score on this path.
+-- We surface only the surrogate customer_id and a coarse risk_band; join back on
+-- customer_id inside an access-controlled context when the detail is required.
 SELECT c.customer_id,
-       c.first_name || ' ' || c.last_name AS full_name,
-       c.risk_score,
+       CASE
+         WHEN c.risk_score >= 0.9 THEN 'VERY_HIGH'
+         WHEN c.risk_score >= 0.75 THEN 'HIGH'
+         ELSE 'ELEVATED'
+       END                                     AS risk_band,
        NVL2(c.email, 'HAS_EMAIL', 'NO_EMAIL') AS email_flag,
        RANK() OVER (ORDER BY c.risk_score DESC) AS risk_rank
   FROM hartford.customer c
