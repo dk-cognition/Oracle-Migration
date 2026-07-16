@@ -100,10 +100,38 @@ Files to touch: `DataSourceFactory`, `ClaimDao` (all `CallableStatement` calls),
 
 ## 9. Suggested migration order (demo script)
 
-1. Translate DDL (`db/oracle/01_schema.sql` → `db/snowflake/01_schema.sql`).
-2. Rewrite views (`03_views.sql`) — remove `(+)`, `ROWNUM`.
-3. Re-implement `claims_pkg` as Snowflake procedures.
-4. Convert reporting SQL in `src/main/resources/sql/reports.sql`.
-5. Swap the JDBC driver/config and rework `CallableStatement` calls.
-6. Replace the flat-file ETL with `COPY INTO`/Snowpipe.
-7. Re-point `application.properties` to the Snowflake datasource block.
+- [x] 1. Translate DDL (`db/oracle/01_schema.sql` → `db/snowflake/01_schema.sql`).
+- [x] 2. Rewrite views (`03_views.sql`) — remove `(+)`, `ROWNUM`.
+- [x] 3. Re-implement `claims_pkg` as Snowflake procedures.
+- [x] 4. Convert reporting SQL in `src/main/resources/sql/reports.sql`.
+- [x] 5. Swap the JDBC driver/config and rework `CallableStatement` calls.
+- [x] 6. Replace the flat-file ETL with `COPY INTO`/Snowpipe.
+- [x] 7. Re-point `application.properties` to the Snowflake datasource block.
+
+## 10. Migration status
+
+All sections above are implemented. Snowflake artifacts land in `db/snowflake/`
+(mirroring the Oracle file names); the Java/JDBC layer and ETL are re-pointed at
+Snowflake. `mvn -q compile` and `mvn -q test` pass (tests run without a live DB).
+
+| Item | Status | Where |
+|------|--------|-------|
+| Schema DDL (types, tablespaces, sequences/triggers → AUTOINCREMENT, indexes dropped) | ✅ | `db/snowflake/01_schema.sql` |
+| `claims_pkg` → procedures + SQL UDFs (`open_claim`, `post_payment`, `loss_ratio`, `fn_customer_full_name`, `fn_default_reserve`) | ✅ | `db/snowflake/02_procedures.sql` |
+| Views: `(+)`→`LEFT JOIN`, `ROWNUM`→`QUALIFY`, `DECODE`→`CASE`, MV refresh clause dropped | ✅ | `db/snowflake/03_views.sql` |
+| Trigger `updated_ts`/CDC semantics → Streams + Tasks | ✅ | `db/snowflake/04_streams_tasks.sql` |
+| Seed data (no DUAL/sequences; `CALL` procedures) | ✅ | `db/snowflake/04_seed_data.sql` |
+| Reporting SQL: `CONNECT BY`→`WITH RECURSIVE`, `TO_CHAR`→`TO_VARCHAR`, `ADD_MONTHS`/`SYSDATE`→`DATEADD`/`CURRENT_TIMESTAMP()`, `ROWNUM`→`QUALIFY`, `MERGE` sans DUAL, `NVL2`→`IFF` | ✅ | `src/main/resources/sql/reports.sql` |
+| JDBC: Snowflake driver, account URL, `USE SCHEMA` init, dropped TNS/vendor props, `SNOWFLAKE_APP_PASSWORD` | ✅ | `pom.xml`, `application.properties`, `DataSourceFactory.java`; `tnsnames.ora` deleted |
+| DAO rework: `CALL`/`SELECT udf()`, AUTOINCREMENT read-back MERGE | ✅ | `ClaimDao.java`, `CustomerDao.java` |
+| ETL: `COPY INTO @stage`, `DATEADD`/`DATE_TRUNC` window | ✅ | `NightlyExtract.java`, `scripts/export_oracle_to_stage.sh` |
+
+Notes:
+- Snowflake schema is created as `HARTFORD.HARTFORD` so the existing
+  `hartford.<object>` qualifiers in the app/report SQL keep resolving.
+- Snowflake does **not** enforce PK/UNIQUE/FK constraints (they are informational);
+  the `open_claim` duplicate handler is therefore illustrative.
+- AUTOINCREMENT gives no gap-free, authoritative "next id"; `CustomerDao.peekNextId`
+  and the insert read-back are best-effort (see the code comments).
+- The `SqlLibraryTest` assertion that checked for `CONNECT BY` was updated to check
+  for `WITH RECURSIVE`, since the migration removes `CONNECT BY`.

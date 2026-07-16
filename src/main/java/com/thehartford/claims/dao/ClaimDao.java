@@ -5,13 +5,11 @@ import com.thehartford.claims.model.Claim;
 
 import javax.sql.DataSource;
 import java.math.BigDecimal;
-import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.sql.Types;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,11 +17,10 @@ import java.util.List;
 /**
  * Data access for {@link Claim}.
  *
- * <p>MIGRATION NOTE: this DAO calls the Oracle PL/SQL package {@code claims_pkg}
- * via JDBC {@code CallableStatement} with the {@code {? = call ...}} escape and
- * {@code OracleTypes}. Snowflake stored procedures are callable but return a
- * single scalar/variant and use different call semantics, so these calls must be
- * re-worked (or the logic moved into the app / dbt). See docs/MIGRATION.md.</p>
+ * <p>Migrated to Snowflake: the Oracle {@code claims_pkg} package units are now
+ * standalone objects. Procedures are invoked with {@code CALL proc(...)} (the
+ * scalar return arrives as a one-row result set) and the {@code loss_ratio}
+ * SQL UDF is invoked with {@code SELECT loss_ratio(...)}. See docs/MIGRATION.md.</p>
  */
 public class ClaimDao {
 
@@ -37,59 +34,58 @@ public class ClaimDao {
         this.dataSource = dataSource;
     }
 
-    /** Opens a claim by invoking the PL/SQL function claims_pkg.open_claim. */
+    /** Opens a claim by calling the Snowflake procedure hartford.open_claim. */
     public long openClaim(long policyId, LocalDateTime lossDate,
                           String claimType, String description) {
-        // Oracle function-call escape syntax with a bound OUT return value.
-        String call = "{ ? = call hartford.claims_pkg.open_claim(?, ?, ?, ?) }";
+        // Snowflake CALL: the procedure's scalar return comes back as a one-row result set.
+        String call = "CALL hartford.open_claim(?, ?, ?, ?)";
         try (Connection conn = dataSource.getConnection();
-             CallableStatement cs = conn.prepareCall(call)) {
-            cs.registerOutParameter(1, Types.NUMERIC);
-            cs.setLong(2, policyId);
-            cs.setTimestamp(3, Timestamp.valueOf(lossDate));
-            cs.setString(4, claimType);
-            cs.setString(5, description);
-            cs.execute();
-            return cs.getLong(1);
+             PreparedStatement ps = conn.prepareStatement(call)) {
+            ps.setLong(1, policyId);
+            ps.setTimestamp(2, Timestamp.valueOf(lossDate));
+            ps.setString(3, claimType);
+            ps.setString(4, description);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
+            throw new DataAccessException("open_claim returned no id for policy " + policyId, null);
         } catch (SQLException e) {
             throw new DataAccessException("open_claim failed for policy " + policyId, e);
         }
     }
 
-    /** Posts a payment against a claim via claims_pkg.post_payment. */
+    /** Posts a payment against a claim via the Snowflake procedure hartford.post_payment. */
     public void postPayment(long claimId, BigDecimal amount, String method, String checkNo) {
-        String call = "{ call hartford.claims_pkg.post_payment(?, ?, ?, ?) }";
+        String call = "CALL hartford.post_payment(?, ?, ?, ?)";
         try (Connection conn = dataSource.getConnection();
-             CallableStatement cs = conn.prepareCall(call)) {
-            cs.setLong(1, claimId);
-            cs.setBigDecimal(2, amount);
-            cs.setString(3, method);
-            if (checkNo == null) {
-                cs.setNull(4, Types.VARCHAR);
-            } else {
-                cs.setString(4, checkNo);
-            }
-            cs.execute();
+             PreparedStatement ps = conn.prepareStatement(call)) {
+            ps.setLong(1, claimId);
+            ps.setBigDecimal(2, amount);
+            ps.setString(3, method);
+            ps.setString(4, checkNo);
+            ps.execute();
         } catch (SQLException e) {
             throw new DataAccessException("post_payment failed for claim " + claimId, e);
         }
     }
 
-    /** Loss ratio via the PL/SQL function claims_pkg.loss_ratio. */
+    /** Loss ratio via the Snowflake SQL UDF hartford.loss_ratio. */
     public BigDecimal lossRatio(long policyId) {
-        String call = "{ ? = call hartford.claims_pkg.loss_ratio(?) }";
+        String query = "SELECT hartford.loss_ratio(?)";
         try (Connection conn = dataSource.getConnection();
-             CallableStatement cs = conn.prepareCall(call)) {
-            cs.registerOutParameter(1, Types.NUMERIC);
-            cs.setLong(2, policyId);
-            cs.execute();
-            return cs.getBigDecimal(1);
+             PreparedStatement ps = conn.prepareStatement(query)) {
+            ps.setLong(1, policyId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getBigDecimal(1) : null;
+            }
         } catch (SQLException e) {
             throw new DataAccessException("loss_ratio failed for policy " + policyId, e);
         }
     }
 
-    /** Finds open claims for a policy. Uses SYSDATE-based aging in SQL. */
+    /** Finds open claims for a policy. */
     public List<Claim> findOpenClaims(long policyId) {
         String sql =
             "SELECT claim_id, claim_number, policy_id, loss_date, reported_date, "
