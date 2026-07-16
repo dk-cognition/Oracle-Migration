@@ -22,11 +22,11 @@
   </properties>
 
   <dependencies>
-    <!-- Oracle JDBC driver (ojdbc). Snowflake migration => swap for snowflake-jdbc. -->
+    <!-- Snowflake JDBC driver (migrated from com.oracle.database.jdbc:ojdbc11). -->
     <dependency>
-      <groupId>com.oracle.database.jdbc</groupId>
-      <artifactId>ojdbc11</artifactId>
-      <version>23.4.0.24.05</version>
+      <groupId>net.snowflake</groupId>
+      <artifactId>snowflake-jdbc</artifactId>
+      <version>3.16.1</version>
     </dependency>
 
     <!-- Connection pool -->

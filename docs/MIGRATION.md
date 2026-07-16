@@ -100,10 +100,60 @@ Files to touch: `DataSourceFactory`, `ClaimDao` (all `CallableStatement` calls),
 
 ## 9. Suggested migration order (demo script)
 
-1. Translate DDL (`db/oracle/01_schema.sql` → `db/snowflake/01_schema.sql`).
-2. Rewrite views (`03_views.sql`) — remove `(+)`, `ROWNUM`.
-3. Re-implement `claims_pkg` as Snowflake procedures.
-4. Convert reporting SQL in `src/main/resources/sql/reports.sql`.
-5. Swap the JDBC driver/config and rework `CallableStatement` calls.
-6. Replace the flat-file ETL with `COPY INTO`/Snowpipe.
-7. Re-point `application.properties` to the Snowflake datasource block.
+- [x] 1. Translate DDL (`db/oracle/01_schema.sql` → `db/snowflake/01_schema.sql`).
+- [x] 2. Rewrite views (`03_views.sql`) — remove `(+)`, `ROWNUM`.
+- [x] 3. Re-implement `claims_pkg` as Snowflake procedures (+ seed data `04_seed_data.sql`).
+- [x] 4. Convert reporting SQL in `src/main/resources/sql/reports.sql`.
+- [x] 5. Swap the JDBC driver/config and rework `CallableStatement` calls.
+- [x] 6. Replace the flat-file ETL with `COPY INTO`/Snowpipe.
+- [x] 7. Re-point `application.properties` to the Snowflake datasource block.
+
+## 10. Migration status & deviations
+
+All artifacts landed in `db/snowflake/` (filenames mirror `db/oracle/`) and the
+Java/JDBC layer, ETL, and reporting SQL are migrated. `mvn -q compile` and
+`mvn -q test` (incl. `SqlLibraryTest`) pass without a live database.
+
+**Schema/objects (`db/snowflake/`)**
+- Target namespace is `HARTFORD.CLAIMS` (database `HARTFORD`, schema `CLAIMS`),
+  matching `application.properties`. Object references in the migrated SQL and
+  Java are unqualified and resolve in the active schema (set via the JDBC URL /
+  `USE SCHEMA`), replacing Oracle's `hartford.`-qualified names.
+- Key generation: `customer_id`/`policy_id`/`payment_id` use `AUTOINCREMENT`
+  (START values preserve the old sequence starts, so seed FK references still
+  line up). `claim_id` keeps an explicit `SEQUENCE seq_claim_id` because
+  `open_claim` needs the id value *before* the row exists to build `claim_number`.
+- `updated_ts` gets `DEFAULT CURRENT_TIMESTAMP`; the Oracle trigger's "on update"
+  refresh is now the writing statement's job (`customer_upsert` sets it). A
+  Stream+Task can restore automatic on-update behaviour if required.
+- All indexes (incl. the function-based `ix_cust_upper_name`) and tablespaces
+  were dropped. `mv_daily_paid` lost `BUILD IMMEDIATE`/`REFRESH FAST ON COMMIT`.
+
+**Procedures (`02_packages.sql`)**
+- `claims_pkg` split into standalone objects: `open_claim`/`post_payment`
+  (procedures), `loss_ratio`/`fn_customer_full_name` (scalar UDFs). The package
+  constant `g_default_reserve` became the UDF `fn_default_reserve()`.
+- `RETURNING ... INTO` in `post_payment` was replaced by a re-query.
+  `RAISE_APPLICATION_ERROR` became a declared Scripting `EXCEPTION` + `RAISE`.
+  Explicit `COMMIT` dropped (Snowflake procs run with AUTOCOMMIT on).
+
+**Java / JDBC**
+- Driver → `snowflake-jdbc`; URL → account form with `warehouse/db/schema/role`;
+  TNS file deleted; vendor pool props removed; init SQL → `USE SCHEMA`.
+- Password env var renamed `ORACLE_APP_PASSWORD` → `SNOWFLAKE_APP_PASSWORD`.
+- `ClaimDao` calls the new procedures via `CALL` (result-set return) and
+  `loss_ratio` via `SELECT`. `CustomerDao.insert` re-queries the AUTOINCREMENT id
+  by email (no `getGeneratedKeys()`/ROWID); `peekNextId` returns an advisory
+  `MAX(id)+1` (Snowflake AUTOINCREMENT has no peekable `CURRVAL`/`NEXTVAL`).
+- `NightlyExtract` now issues `COPY INTO @stage` (no flat file);
+  `scripts/export_oracle_to_stage.sh` → `scripts/export_to_snowflake_stage.sh`
+  (SnowSQL `COPY INTO`, no SFTP).
+
+**Reporting SQL & tests**
+- `reports.sql` fully rewritten (`WITH RECURSIVE`, `QUALIFY`, `CASE`, `IFF`,
+  `COALESCE`, `DATEADD`, `DATEDIFF`, `TO_VARCHAR`, MERGE without DUAL). Positional
+  binds in `customer_upsert` changed from `:1..:4` to `?`. `REGEXP_LIKE` is a
+  full-string match in Snowflake, so `'^860-'` became `'860-.*'`.
+- `SqlLibraryTest.orgChartQueryUsesConnectBy` was updated to
+  `orgChartQueryUsesRecursiveCte` (asserts `WITH RECURSIVE`, no `CONNECT BY`),
+  reflecting the hierarchy rewrite.
