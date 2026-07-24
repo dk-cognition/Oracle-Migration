@@ -35,11 +35,11 @@ Oracle→Snowflake mapping and a suggested migration order.
 
 ```
 db/oracle/            Oracle 19c DDL, PL/SQL, views, seed data (the source system)
-db/snowflake/         Empty target — the migration lands Snowflake artifacts here
+db/snowflake/         Migrated Snowflake DDL, procedures, views, streams/tasks, seed
 src/main/java/        Java 11 JDBC data-access layer, reports, nightly ETL
-src/main/resources/   application.properties, tnsnames.ora, externalized SQL
+src/main/resources/   application.properties, externalized Snowflake SQL
 src/test/java/        Unit tests (no live DB required)
-scripts/              Legacy Oracle flat-file export (to be replaced by COPY INTO)
+scripts/              Snowflake COPY INTO @stage unload
 docs/MIGRATION.md     Oracle → Snowflake migration guide / checklist
 ```
 
@@ -50,9 +50,10 @@ docs/MIGRATION.md     Oracle → Snowflake migration guide / checklist
 | `db/oracle/01_schema.sql` | Tables, sequences, constraints, indexes, tablespace |
 | `db/oracle/02_packages.sql` | `claims_pkg` package + functions + triggers |
 | `db/oracle/03_views.sql` | Reporting views (`(+)`, `ROWNUM`, `DECODE`) + MV |
-| `src/main/resources/sql/reports.sql` | Named reporting queries (Oracle-isms) |
-| `src/.../dao/ClaimDao.java` | Calls the PL/SQL package via `CallableStatement` |
-| `src/.../etl/NightlyExtract.java` | Flat-file nightly extract |
+| `src/main/resources/sql/reports.sql` | Named reporting queries (Snowflake SQL) |
+| `src/.../dao/ClaimDao.java` | Calls the Snowflake procedures via `CALL` |
+| `src/.../etl/NightlyExtract.java` | Nightly `COPY INTO @stage` extract |
+| `db/snowflake/*.sql` | Migrated Snowflake schema, procedures, views, seed |
 
 ## Build
 
@@ -61,9 +62,10 @@ mvn -q compile          # compiles the Java data-access layer
 mvn -q test             # runs unit tests (no database needed)
 ```
 
-Runtime execution needs a live Oracle instance reachable via the `HRTFD_PROD`
-TNS entry and the `ORACLE_APP_PASSWORD` environment variable — not required for
-the migration demo, which works statically over the SQL and Java sources.
+Runtime execution needs a reachable Snowflake account (see the `db.*` settings in
+`application.properties`) and the `SNOWFLAKE_APP_PASSWORD` environment variable —
+not required for the migration demo, which works statically over the SQL and Java
+sources.
 
 ## Running the migration demo with Devin
 

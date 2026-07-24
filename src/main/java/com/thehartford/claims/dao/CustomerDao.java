@@ -13,11 +13,9 @@ import java.sql.Statement;
 /**
  * Data access for customers.
  *
- * <p>MIGRATION NOTE: {@link #insert} relies on {@code seq_customer_id.NEXTVAL}
- * being applied by the {@code trg_customer_biu} row trigger, then reads the
- * generated key back with Oracle's {@code getGeneratedKeys()} using ROWID.
- * Snowflake has neither row triggers nor ROWID; use an IDENTITY/AUTOINCREMENT
- * column or an explicit sequence in the INSERT. See docs/MIGRATION.md.</p>
+ * <p>Snowflake supports neither row triggers nor {@code getGeneratedKeys()}, so
+ * {@link #insert} draws the key from {@code seq_customer_id} up front, inserts it
+ * explicitly, and re-queries the row to confirm it landed. See docs/MIGRATION.md.</p>
  */
 public class CustomerDao {
 
@@ -33,29 +31,36 @@ public class CustomerDao {
         this.sql = SqlLibrary.fromResource("/sql/reports.sql");
     }
 
-    /** Inserts a customer, letting the Oracle trigger assign the id from a sequence. */
+    /** Inserts a customer with an id taken from the Snowflake sequence, then re-queries it. */
     public long insert(String firstName, String lastName, String email) {
         String insert =
-            "INSERT INTO hartford.customer (first_name, last_name, email) VALUES (?, ?, ?)";
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps =
-                 conn.prepareStatement(insert, new String[] {"CUSTOMER_ID"})) {
-            ps.setString(1, firstName);
-            ps.setString(2, lastName);
-            ps.setString(3, email);
-            ps.executeUpdate();
-            try (ResultSet keys = ps.getGeneratedKeys()) {
-                if (keys.next()) {
-                    return keys.getLong(1);
+            "INSERT INTO customer (customer_id, first_name, last_name, email) VALUES (?, ?, ?, ?)";
+        String reselect = "SELECT customer_id FROM customer WHERE customer_id = ?";
+        long customerId = peekNextId();
+        try (Connection conn = dataSource.getConnection()) {
+            try (PreparedStatement ps = conn.prepareStatement(insert)) {
+                ps.setLong(1, customerId);
+                ps.setString(2, firstName);
+                ps.setString(3, lastName);
+                ps.setString(4, email);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = conn.prepareStatement(reselect)) {
+                ps.setLong(1, customerId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getLong(1);
+                    }
                 }
             }
-            throw new DataAccessException("No generated key returned for customer insert", null);
+            throw new DataAccessException(
+                "Inserted customer " + customerId + " could not be read back", null);
         } catch (SQLException e) {
             throw new DataAccessException("insert customer failed", e);
         }
     }
 
-    /** Upsert via the Oracle MERGE ... USING dual statement in reports.sql. */
+    /** Upsert via the Snowflake MERGE statement in reports.sql. */
     public void upsert(long customerId, String firstName, String lastName, String email) {
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql.get("customer_upsert"))) {
@@ -69,9 +74,9 @@ public class CustomerDao {
         }
     }
 
-    /** Reads the next customer id straight from the Oracle sequence via DUAL. */
+    /** Reads the next customer id straight from the Snowflake sequence (no DUAL). */
     public long peekNextId() {
-        String q = "SELECT hartford.seq_customer_id.NEXTVAL FROM dual";
+        String q = "SELECT seq_customer_id.NEXTVAL";
         try (Connection conn = dataSource.getConnection();
              Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(q)) {
