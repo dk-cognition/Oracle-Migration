@@ -6,6 +6,24 @@ Snowflake equivalent. It is the working checklist for the migration demo.
 > Scope: schema DDL, PL/SQL, reporting SQL, the Java JDBC data-access layer, and
 > the nightly batch/ETL flow.
 
+## Status: migration complete
+
+All items below have been migrated. The Oracle sources under `db/oracle/` are
+retained for reference only; the running artifacts are:
+
+| Area | Status | Target artifact |
+|------|--------|-----------------|
+| Schema DDL | Done | `db/snowflake/01_schema.sql` |
+| Views + MV | Done | `db/snowflake/03_views.sql` |
+| `claims_pkg` | Done | `db/snowflake/02_procedures.sql` |
+| Triggers | Done | column defaults + `db/snowflake/04_streams_tasks.sql` |
+| Seed data | Done | `db/snowflake/04_seed_data.sql` |
+| Reporting SQL | Done | `src/main/resources/sql/reports.sql` |
+| JDBC driver/config | Done | `pom.xml`, `DataSourceFactory`, `application.properties` |
+| DAO call semantics | Done | `ClaimDao`, `CustomerDao` |
+| ETL | Done | `NightlyExtract`, `scripts/export_snowflake_to_stage.sh` |
+| TNS | Done | `src/main/resources/tnsnames.ora` deleted |
+
 ---
 
 ## 1. Data types
@@ -20,6 +38,10 @@ Snowflake equivalent. It is the working checklist for the migration demo.
 | `RAW` / `BLOB` | `BINARY` | Not used here but common. |
 
 ## 2. Sequences & key generation
+
+Implemented as `CREATE SEQUENCE` + column `DEFAULT seq.NEXTVAL` on `customer`,
+`policy`, `claim` and `claim_payment` (`db/snowflake/01_schema.sql`), so the
+application can still peek at the next id via the sequence.
 
 - Oracle: `CREATE SEQUENCE`, `seq.NEXTVAL`, applied by a `BEFORE INSERT` trigger.
 - Snowflake: use `CREATE SEQUENCE` + column `DEFAULT seq.NEXTVAL`, **or** an
@@ -36,6 +58,10 @@ Snowflake has **no row-level triggers**. Re-express:
 - `trg_policy_bi` → `policy_id NUMBER AUTOINCREMENT`.
 - MV fast-refresh trigger semantics → **Streams + Tasks**.
 
+Implemented: PK defaults live in `db/snowflake/01_schema.sql`; `updated_ts`
+maintenance on UPDATE runs as `strm_customer_changes` + `task_customer_updated_ts`
+in `db/snowflake/04_streams_tasks.sql`.
+
 ## 4. PL/SQL → Snowflake Scripting
 
 `claims_pkg` (a package) has no direct analog — Snowflake has no packages.
@@ -45,6 +71,10 @@ Snowflake has **no row-level triggers**. Re-express:
 - `RAISE_APPLICATION_ERROR` → Scripting `RAISE`/`EXCEPTION`.
 - `RETURNING ... INTO` is not supported → re-query or use a Stream.
 - Implicit `COMMIT` inside procedures differs; review transaction boundaries.
+
+Implemented in `db/snowflake/02_procedures.sql`: procedures `open_claim`,
+`post_payment`, `loss_ratio`, UDFs `fn_customer_full_name` and
+`fn_default_reserve` (the former `g_default_reserve` constant).
 
 ## 5. SQL construct rewrites
 
@@ -88,8 +118,11 @@ Snowflake has **no row-level triggers**. Re-express:
 | Stored-proc calls | `CallableStatement` `{ ? = call pkg.fn(...) }` | rework: Snowflake procs return one value; often push logic to app/dbt |
 | Generated keys | `getGeneratedKeys()` via ROWID | not supported; `SELECT seq.CURRVAL` won't work either — re-query or use `RETURNING` in Snowpark |
 
-Files to touch: `DataSourceFactory`, `ClaimDao` (all `CallableStatement` calls),
-`CustomerDao.insert`/`peekNextId`, and every statement string in `reports.sql`.
+Implemented: `DataSourceFactory` now sets the `warehouse`/`db`/`schema`/`role`
+Snowflake connection properties and reads `SNOWFLAKE_APP_PASSWORD` (formerly
+`ORACLE_APP_PASSWORD`); `ClaimDao` uses `CALL proc(...)` with a one-row result
+set instead of `{ ? = call ... }`; `CustomerDao.insert` draws the key from
+`seq_customer_id` and re-queries, and `peekNextId` runs `SELECT seq.NEXTVAL`.
 
 ## 8. ETL / batch
 
@@ -97,6 +130,11 @@ Files to touch: `DataSourceFactory`, `ClaimDao` (all `CallableStatement` calls),
   files SFTP'd to the warehouse. Replace with `COPY INTO @stage` /
   **Snowpipe** for continuous load, eliminating the flat-file hop.
 - `TRUNC(SYSDATE) - 1` window logic → `DATEADD` / Streams for CDC.
+
+Implemented: `NightlyExtract.copyChangedClaims` / `copyChangedClaimsFromStream`
+run `COPY INTO @stage`, and `scripts/export_snowflake_to_stage.sh` (renamed from
+`export_oracle_to_stage.sh`) unloads each table via `snowsql` and documents the
+equivalent `CREATE PIPE ... AUTO_INGEST` Snowpipe setup.
 
 ## 9. Suggested migration order (demo script)
 
@@ -107,3 +145,5 @@ Files to touch: `DataSourceFactory`, `ClaimDao` (all `CallableStatement` calls),
 5. Swap the JDBC driver/config and rework `CallableStatement` calls.
 6. Replace the flat-file ETL with `COPY INTO`/Snowpipe.
 7. Re-point `application.properties` to the Snowflake datasource block.
+
+All seven steps are complete; `mvn -q compile` and `mvn -q test` pass.
