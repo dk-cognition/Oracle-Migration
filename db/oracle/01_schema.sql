@@ -5,6 +5,17 @@
 -- Domain: Property & Casualty policy administration + claims processing.
 -- NOTE (migration): this file is intentionally full of Oracle-isms that do NOT
 -- port 1:1 to Snowflake. See docs/MIGRATION.md.
+--
+-- PII: customer.ssn and customer.date_of_birth are regulated PII and are stored
+-- with TDE column encryption; non-privileged sessions additionally see redacted
+-- values via the DBMS_REDACT policy at the bottom of this file. TDE column
+-- encryption requires an open keystore before this script runs, e.g.:
+--
+--   ADMINISTER KEY MANAGEMENT CREATE KEYSTORE '/u01/app/oracle/admin/HRTFD/wallet'
+--     IDENTIFIED BY "<keystore-password>";
+--   ADMINISTER KEY MANAGEMENT SET KEYSTORE OPEN IDENTIFIED BY "<keystore-password>";
+--   ADMINISTER KEY MANAGEMENT SET KEY IDENTIFIED BY "<keystore-password>"
+--     WITH BACKUP;
 --------------------------------------------------------------------------------
 
 -- Dedicated schema / tablespace assignment (Snowflake has no tablespaces).
@@ -28,8 +39,10 @@ CREATE TABLE hartford.customer (
   customer_id      NUMBER(12)        NOT NULL,
   first_name       VARCHAR2(60 CHAR),
   last_name        VARCHAR2(60 CHAR),
-  ssn              VARCHAR2(11 BYTE),
-  date_of_birth    DATE,
+  -- Regulated PII: encrypted at rest with TDE (NO SALT on ssn so equality
+  -- lookups on it remain indexable).
+  ssn              VARCHAR2(11 BYTE) ENCRYPT USING 'AES256' NO SALT,
+  date_of_birth    DATE              ENCRYPT USING 'AES256',
   email            VARCHAR2(120 CHAR),
   phone            VARCHAR2(20 CHAR),
   -- Oracle DATE carries a time component; downstream code relies on it.
@@ -120,3 +133,47 @@ CREATE INDEX hartford.ix_claim_policy    ON hartford.claim (policy_id)    TABLES
 CREATE INDEX hartford.ix_claim_status    ON hartford.claim (status)       TABLESPACE hartford_data;
 -- Function-based index (Snowflake has no function-based indexes; drop or re-model)
 CREATE INDEX hartford.ix_cust_upper_name ON hartford.customer (UPPER(last_name)) TABLESPACE hartford_data;
+
+--------------------------------------------------------------------------------
+-- PII protection: least-privilege grants + redaction
+--
+-- Only holders of hartford_pii_reader may see plaintext ssn / date_of_birth.
+-- Everything else (reporting users, the nightly flat-file extract, ad-hoc DBA
+-- queries that lack EXEMPT REDACTION POLICY) reads masked values.
+-- Snowflake equivalent: CREATE MASKING POLICY + ALTER TABLE ... SET MASKING
+-- POLICY, applied to the same two columns. See docs/MIGRATION.md.
+--------------------------------------------------------------------------------
+CREATE ROLE hartford_customer_reader;   -- non-PII read access
+CREATE ROLE hartford_pii_reader;        -- cleartext PII read access
+
+-- Column-level SELECT: PII columns are not part of the general read grant.
+GRANT SELECT (customer_id, first_name, last_name, email, phone,
+              created_ts, updated_ts, risk_score, lifetime_premium, notes)
+  ON hartford.customer TO hartford_customer_reader;
+GRANT SELECT ON hartford.customer TO hartford_pii_reader;
+
+BEGIN
+  DBMS_REDACT.add_policy(
+    object_schema       => 'HARTFORD',
+    object_name         => 'CUSTOMER',
+    policy_name         => 'RDP_CUSTOMER_PII',
+    column_name         => 'SSN',
+    function_type       => DBMS_REDACT.regexp,
+    regexp_pattern      => '\d{3}-\d{2}-(\d{4})',
+    regexp_replace_string => 'XXX-XX-\1',
+    regexp_position     => 1,
+    regexp_occurrence   => 0,
+    -- Redact unless the session holds the PII role.
+    expression          => 'SYS_CONTEXT(''SYS_SESSION_ROLES'',''HARTFORD_PII_READER'') = ''FALSE''',
+    policy_description  => 'Mask customer SSN/DOB for non-PII roles',
+    enable              => TRUE);
+
+  DBMS_REDACT.alter_policy(
+    object_schema => 'HARTFORD',
+    object_name   => 'CUSTOMER',
+    policy_name   => 'RDP_CUSTOMER_PII',
+    action        => DBMS_REDACT.add_column,
+    column_name   => 'DATE_OF_BIRTH',
+    function_type => DBMS_REDACT.full);   -- DOB -> 01-JAN-01
+END;
+/
