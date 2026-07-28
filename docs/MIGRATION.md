@@ -76,6 +76,18 @@ Snowflake has **no row-level triggers**. Re-express:
 - Materialized view with joins (`mv_daily_paid` is fine — single table — but
   `REFRESH FAST ON COMMIT` → Snowflake MVs auto-maintain; drop the clause).
 
+## 6b. PII protection (must be carried over, not dropped)
+
+`customer.ssn` / `customer.date_of_birth` are TDE-encrypted columns guarded by
+the `RDP_CUSTOMER_PII` DBMS_REDACT policy and column-level `SELECT` grants.
+
+| Oracle today | Snowflake target |
+|--------------|------------------|
+| `ENCRYPT USING 'AES256'` (TDE column encryption) | storage is encrypted by default; add Tri-Secret Secure / a customer-managed key |
+| `DBMS_REDACT.add_policy` on `SSN` / `DATE_OF_BIRTH` | `CREATE MASKING POLICY` + `ALTER TABLE customer MODIFY COLUMN ... SET MASKING POLICY` |
+| `hartford_pii_reader` role check via `SYS_SESSION_ROLES` | `CURRENT_ROLE()`/`IS_ROLE_IN_SESSION()` inside the masking policy body |
+| Column-level `GRANT SELECT (cols)` | grant on a non-PII view, or rely on the masking policy |
+
 ## 7. Java / JDBC layer
 
 | Concern | Oracle today | Snowflake target |
@@ -106,4 +118,5 @@ Files to touch: `DataSourceFactory`, `ClaimDao` (all `CallableStatement` calls),
 4. Convert reporting SQL in `src/main/resources/sql/reports.sql`.
 5. Swap the JDBC driver/config and rework `CallableStatement` calls.
 6. Replace the flat-file ETL with `COPY INTO`/Snowpipe.
+6b. Port the PII masking policy + PII role before loading real customer data.
 7. Re-point `application.properties` to the Snowflake datasource block.
