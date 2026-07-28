@@ -26,6 +26,9 @@ import java.sql.Statement;
  */
 public class NightlyExtract {
 
+    static final char DELIMITER = '|';
+    static final char QUOTE = '"';
+
     private final DataSource dataSource;
 
     public NightlyExtract() {
@@ -59,10 +62,9 @@ public class NightlyExtract {
                 StringBuilder line = new StringBuilder();
                 for (int i = 1; i <= cols; i++) {
                     if (i > 1) {
-                        line.append('|');
+                        line.append(DELIMITER);
                     }
-                    String v = rs.getString(i);
-                    line.append(v == null ? "" : v);
+                    line.append(encodeField(rs.getString(i)));
                 }
                 writer.write(line.toString());
                 writer.newLine();
@@ -74,6 +76,41 @@ public class NightlyExtract {
             throw new RuntimeException("Failed writing extract file " + outputFile, e);
         }
         return rowCount;
+    }
+
+    /**
+     * Encodes a single field using RFC 4180 style quoting so that values containing
+     * the delimiter, a quote or a line break cannot inject extra fields or records
+     * into the downstream warehouse feed. The downstream loader must be configured
+     * with the same convention (field delimiter '|', quote character '"', doubled
+     * embedded quotes).
+     */
+    static String encodeField(String value) {
+        if (value == null) {
+            return "";
+        }
+        boolean needsQuoting = false;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == DELIMITER || c == QUOTE || c == '\n' || c == '\r') {
+                needsQuoting = true;
+                break;
+            }
+        }
+        if (!needsQuoting) {
+            return value;
+        }
+        StringBuilder sb = new StringBuilder(value.length() + 8);
+        sb.append(QUOTE);
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == QUOTE) {
+                sb.append(QUOTE);
+            }
+            sb.append(c);
+        }
+        sb.append(QUOTE);
+        return sb.toString();
     }
 
     public static void main(String[] args) {
