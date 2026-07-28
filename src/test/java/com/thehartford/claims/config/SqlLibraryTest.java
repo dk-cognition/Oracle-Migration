@@ -2,6 +2,7 @@ package com.thehartford.claims.config;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -20,8 +21,10 @@ class SqlLibraryTest {
     }
 
     @Test
-    void orgChartQueryUsesConnectBy() {
-        assertTrue(lib.get("agent_org_chart").toUpperCase().contains("CONNECT BY"));
+    void orgChartQueryUsesRecursiveCte() {
+        String orgChart = lib.get("agent_org_chart").toUpperCase();
+        assertTrue(orgChart.contains("WITH RECURSIVE"));
+        assertFalse(orgChart.contains("CONNECT BY"));
     }
 
     @Test

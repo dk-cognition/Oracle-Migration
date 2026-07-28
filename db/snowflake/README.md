@@ -1,16 +1,20 @@
-# Snowflake target (to be built during the migration)
+# Snowflake target (produced by the migration)
 
-This directory is intentionally empty except for this note. It is the landing
-zone for the migrated, Snowflake-native artifacts that the demo produces:
+Snowflake-native artifacts, mirroring the source filenames in `../oracle/` so each
+rewrite diffs against its Oracle original:
 
 ```
 db/snowflake/
-├── 01_schema.sql       -- DDL rewritten for Snowflake (NUMBER/TIMESTAMP, IDENTITY, sequences)
-├── 02_procedures.sql   -- claims_pkg re-implemented as Snowflake Scripting procedures
-├── 03_views.sql        -- views with ANSI joins, QUALIFY, CASE (no (+)/ROWNUM/DECODE)
-├── 04_streams_tasks.sql-- trigger logic re-expressed as Streams + Tasks
-└── 04_seed_data.sql    -- seed data using CURRENT_TIMESTAMP / TO_DATE
+├── 01_schema.sql      -- DDL: VARCHAR/NUMBER/FLOAT/TIMESTAMP_NTZ, sequence &
+│                         AUTOINCREMENT defaults, no tablespaces, no indexes
+├── 02_packages.sql    -- claims_pkg split into procedures / UDFs, config table
+│                         for g_default_reserve, Stream + Task for updated_ts
+├── 03_views.sql       -- ANSI joins, CASE, COALESCE, QUALIFY, recursive CTE,
+│                         auto-maintained materialized view
+└── 04_seed_data.sql   -- seed data via TO_TIMESTAMP_NTZ + CALL of the procedures
 ```
+
+Apply them in file order (`01` → `04`).
 
 See [`../../docs/MIGRATION.md`](../../docs/MIGRATION.md) for the mapping from
 each Oracle construct to its Snowflake equivalent.
