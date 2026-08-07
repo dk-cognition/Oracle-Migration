@@ -7,3 +7,8 @@ extract/
 .idea/
 *.iml
 .DS_Store
+
+# Environment-specific Oracle Net config (real hosts/ports/service names).
+# Only the placeholder template tnsnames.ora.example belongs in git.
+tnsnames.ora
+!tnsnames.ora.example

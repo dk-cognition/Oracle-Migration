@@ -81,8 +81,8 @@ Snowflake has **no row-level triggers**. Re-express:
 | Concern | Oracle today | Snowflake target |
 |---------|--------------|------------------|
 | Driver | `oracle.jdbc.OracleDriver` (`ojdbc11`) | `net.snowflake.client.jdbc.SnowflakeDriver` (`snowflake-jdbc`) |
-| URL | `jdbc:oracle:thin:@HRTFD_PROD` + `tnsnames.ora` | `jdbc:snowflake://<account>.snowflakecomputing.com/?warehouse=...&db=...&role=...` |
-| TNS | `oracle.net.tns_admin` system property, `tnsnames.ora` | none (delete the file) |
+| URL | `jdbc:oracle:thin:@$DB_TNS_ALIAS` + a deployed `tnsnames.ora` | `jdbc:snowflake://<account>.snowflakecomputing.com/?warehouse=...&db=...&role=...` |
+| TNS | `oracle.net.tns_admin` from `$TNS_ADMIN`, `tnsnames.ora` deployed out-of-band | none (drop the file and both env vars) |
 | Pool init SQL | `ALTER SESSION SET CURRENT_SCHEMA` | `USE SCHEMA` / set in URL |
 | Vendor props | `implicitStatementCacheSize`, `defaultRowPrefetch` | remove (Snowflake-managed) |
 | Stored-proc calls | `CallableStatement` `{ ? = call pkg.fn(...) }` | rework: Snowflake procs return one value; often push logic to app/dbt |

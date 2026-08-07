@@ -1,0 +1,26 @@
+# Oracle Net service names (TNS) TEMPLATE. Oracle-specific connection descriptor
+# format. Copy this file to the directory pointed at by the TNS_ADMIN environment
+# variable and fill in the real hosts/ports/service names from configuration
+# management or secrets tooling. Never commit a populated tnsnames.ora: real
+# tnsnames.ora files are ignored by .gitignore.
+#
+# The Snowflake migration removes TNS entirely (Snowflake uses a URL/account
+# identifier). Kept here to illustrate what must be decommissioned.
+
+<TNS_ALIAS> =
+  (DESCRIPTION =
+    (ADDRESS = (PROTOCOL = TCP)(HOST = <db-host>)(PORT = <db-port>))
+    (CONNECT_DATA =
+      (SERVER = DEDICATED)
+      (SERVICE_NAME = <db-service-name>)
+    )
+  )
+
+<TNS_ALIAS_DR> =
+  (DESCRIPTION =
+    (ADDRESS = (PROTOCOL = TCP)(HOST = <dr-db-host>)(PORT = <dr-db-port>))
+    (CONNECT_DATA =
+      (SERVER = DEDICATED)
+      (SERVICE_NAME = <dr-db-service-name>)
+    )
+  )
