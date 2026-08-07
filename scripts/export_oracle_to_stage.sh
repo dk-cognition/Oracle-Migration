@@ -21,7 +21,11 @@ TABLES=(customer agent policy claim claim_payment)
 
 for t in "${TABLES[@]}"; do
   echo "Exporting hartford.${t} ..."
-  sqlplus -s "${DB_USER}/${ORACLE_APP_PASSWORD}@${DB_TNS}" <<SQL
+  # Do not pass credentials on the command line: argv is world-readable via
+  # ps/proc. Start with /nolog and CONNECT over stdin so the password never
+  # appears in the process table.
+  sqlplus -s /nolog <<SQL
+    CONNECT ${DB_USER}/${ORACLE_APP_PASSWORD}@${DB_TNS}
     SET PAGESIZE 0
     SET FEEDBACK OFF
     SET COLSEP '|'
