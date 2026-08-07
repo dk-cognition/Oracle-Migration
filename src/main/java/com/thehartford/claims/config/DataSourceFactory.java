@@ -37,15 +37,13 @@ public final class DataSourceFactory {
     private static HikariDataSource build() {
         Properties props = load("/application.properties");
 
-        // Oracle TNS resolution depends on this JVM system property.
-        String tnsAdmin = props.getProperty("db.tns.admin");
-        if (tnsAdmin != null) {
-            System.setProperty("oracle.net.tns_admin", tnsAdmin);
-        }
+        // Oracle TNS resolution depends on this JVM system property. The descriptor
+        // directory and alias are environment-specific and never committed.
+        System.setProperty("oracle.net.tns_admin", requireEnv("TNS_ADMIN"));
 
         HikariConfig cfg = new HikariConfig();
         cfg.setDriverClassName(props.getProperty("db.driver"));
-        cfg.setJdbcUrl(props.getProperty("db.url"));
+        cfg.setJdbcUrl("jdbc:oracle:thin:@" + requireEnv("DB_TNS_ALIAS"));
         cfg.setUsername(props.getProperty("db.username"));
         cfg.setPassword(resolvePassword());
         cfg.setMaximumPoolSize(Integer.parseInt(props.getProperty("db.pool.maxSize", "10")));
@@ -63,12 +61,16 @@ public final class DataSourceFactory {
     }
 
     private static String resolvePassword() {
-        String pw = System.getenv("ORACLE_APP_PASSWORD");
-        if (pw == null || pw.isEmpty()) {
+        return requireEnv("ORACLE_APP_PASSWORD");
+    }
+
+    private static String requireEnv(String name) {
+        String value = System.getenv(name);
+        if (value == null || value.isEmpty()) {
             throw new IllegalStateException(
-                "ORACLE_APP_PASSWORD is not set; cannot connect to Oracle.");
+                name + " is not set; cannot connect to Oracle.");
         }
-        return pw;
+        return value;
     }
 
     private static Properties load(String resource) {

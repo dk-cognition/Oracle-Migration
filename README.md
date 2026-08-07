@@ -26,7 +26,7 @@ port 1:1 to Snowflake — the exact things a real migration has to find and rewr
   `NVL`/`NVL2`, `SYSDATE`, `ADD_MONTHS`, `TO_CHAR`, `... FROM dual`, `MERGE`
 - Tablespaces and a function-based index
 - A flat-file **ETL** (SQL\*Plus spool → SFTP) instead of `COPY INTO`/Snowpipe
-- An Oracle-thin JDBC config with `tnsnames.ora` and vendor-specific pool props
+- An Oracle-thin JDBC config with a TNS descriptor and vendor-specific pool props
 
 See [`docs/MIGRATION.md`](docs/MIGRATION.md) for the full construct-by-construct
 Oracle→Snowflake mapping and a suggested migration order.
@@ -37,7 +37,7 @@ Oracle→Snowflake mapping and a suggested migration order.
 db/oracle/            Oracle 19c DDL, PL/SQL, views, seed data (the source system)
 db/snowflake/         Empty target — the migration lands Snowflake artifacts here
 src/main/java/        Java 11 JDBC data-access layer, reports, nightly ETL
-src/main/resources/   application.properties, tnsnames.ora, externalized SQL
+src/main/resources/   application.properties, tnsnames.ora.example, externalized SQL
 src/test/java/        Unit tests (no live DB required)
 scripts/              Legacy Oracle flat-file export (to be replaced by COPY INTO)
 docs/MIGRATION.md     Oracle → Snowflake migration guide / checklist
@@ -61,9 +61,19 @@ mvn -q compile          # compiles the Java data-access layer
 mvn -q test             # runs unit tests (no database needed)
 ```
 
-Runtime execution needs a live Oracle instance reachable via the `HRTFD_PROD`
-TNS entry and the `ORACLE_APP_PASSWORD` environment variable — not required for
-the migration demo, which works statically over the SQL and Java sources.
+Runtime execution needs a live Oracle instance and these environment variables —
+not required for the migration demo, which works statically over the SQL and
+Java sources:
+
+| Variable | Meaning |
+|----------|---------|
+| `TNS_ADMIN` | Directory holding the deployed `tnsnames.ora` (see `src/main/resources/tnsnames.ora.example`) |
+| `DB_TNS_ALIAS` | TNS alias to connect to |
+| `ORACLE_APP_PASSWORD` | Password for `hartford_app` |
+
+Real connect descriptors (hosts, ports, service names) are environment-specific
+and must be supplied by configuration management, never committed: `tnsnames.ora`
+is git-ignored and only the placeholder template is tracked.
 
 ## Running the migration demo with Devin
 

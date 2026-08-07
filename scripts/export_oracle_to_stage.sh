@@ -6,13 +6,13 @@
 # SQL*Plus, then hands them off to the warehouse feed. This is the pattern the
 # Snowflake migration replaces with COPY INTO from a cloud stage / Snowpipe.
 #
-# Usage: ORACLE_APP_PASSWORD=*** ./export_oracle_to_stage.sh /path/to/outdir
+# Usage: DB_TNS=<tns-alias> ORACLE_APP_PASSWORD=*** ./export_oracle_to_stage.sh /path/to/outdir
 # ============================================================================
 set -euo pipefail
 
 OUT_DIR="${1:-./extract}"
 DB_USER="${DB_USER:-hartford_app}"
-DB_TNS="${DB_TNS:-HRTFD_PROD}"
+: "${DB_TNS:?Set DB_TNS to the TNS alias for the target database}"
 : "${ORACLE_APP_PASSWORD:?Set ORACLE_APP_PASSWORD}"
 
 mkdir -p "${OUT_DIR}"
