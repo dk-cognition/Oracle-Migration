@@ -19,11 +19,10 @@ import java.util.List;
 /**
  * Data access for {@link Claim}.
  *
- * <p>MIGRATION NOTE: this DAO calls the Oracle PL/SQL package {@code claims_pkg}
- * via JDBC {@code CallableStatement} with the {@code {? = call ...}} escape and
- * {@code OracleTypes}. Snowflake stored procedures are callable but return a
- * single scalar/variant and use different call semantics, so these calls must be
- * re-worked (or the logic moved into the app / dbt). See docs/MIGRATION.md.</p>
+ * <p>Calls the standalone Snowflake procedures that replaced the Oracle
+ * {@code claims_pkg} package. A Snowflake {@code CALL} returns its value as a
+ * single-row, single-column result set rather than an OUT parameter, so the
+ * {@code { ? = call ... }} escape is gone. See docs/MIGRATION.md.</p>
  */
 public class ClaimDao {
 
@@ -37,28 +36,31 @@ public class ClaimDao {
         this.dataSource = dataSource;
     }
 
-    /** Opens a claim by invoking the PL/SQL function claims_pkg.open_claim. */
+    /** Opens a claim by invoking the Snowflake procedure open_claim. */
     public long openClaim(long policyId, LocalDateTime lossDate,
                           String claimType, String description) {
-        // Oracle function-call escape syntax with a bound OUT return value.
-        String call = "{ ? = call hartford.claims_pkg.open_claim(?, ?, ?, ?) }";
+        String call = "CALL hartford.claims.open_claim(?, ?, ?, ?)";
         try (Connection conn = dataSource.getConnection();
              CallableStatement cs = conn.prepareCall(call)) {
-            cs.registerOutParameter(1, Types.NUMERIC);
-            cs.setLong(2, policyId);
-            cs.setTimestamp(3, Timestamp.valueOf(lossDate));
-            cs.setString(4, claimType);
-            cs.setString(5, description);
-            cs.execute();
-            return cs.getLong(1);
+            cs.setLong(1, policyId);
+            cs.setTimestamp(2, Timestamp.valueOf(lossDate));
+            cs.setString(3, claimType);
+            cs.setString(4, description);
+            try (ResultSet rs = cs.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
+            throw new DataAccessException(
+                "open_claim returned no claim_id for policy " + policyId, null);
         } catch (SQLException e) {
             throw new DataAccessException("open_claim failed for policy " + policyId, e);
         }
     }
 
-    /** Posts a payment against a claim via claims_pkg.post_payment. */
+    /** Posts a payment against a claim via the post_payment procedure. */
     public void postPayment(long claimId, BigDecimal amount, String method, String checkNo) {
-        String call = "{ call hartford.claims_pkg.post_payment(?, ?, ?, ?) }";
+        String call = "CALL hartford.claims.post_payment(?, ?, ?, ?)";
         try (Connection conn = dataSource.getConnection();
              CallableStatement cs = conn.prepareCall(call)) {
             cs.setLong(1, claimId);
@@ -75,26 +77,26 @@ public class ClaimDao {
         }
     }
 
-    /** Loss ratio via the PL/SQL function claims_pkg.loss_ratio. */
+    /** Loss ratio via the loss_ratio procedure. */
     public BigDecimal lossRatio(long policyId) {
-        String call = "{ ? = call hartford.claims_pkg.loss_ratio(?) }";
+        String call = "CALL hartford.claims.loss_ratio(?)";
         try (Connection conn = dataSource.getConnection();
              CallableStatement cs = conn.prepareCall(call)) {
-            cs.registerOutParameter(1, Types.NUMERIC);
-            cs.setLong(2, policyId);
-            cs.execute();
-            return cs.getBigDecimal(1);
+            cs.setLong(1, policyId);
+            try (ResultSet rs = cs.executeQuery()) {
+                return rs.next() ? rs.getBigDecimal(1) : null;
+            }
         } catch (SQLException e) {
             throw new DataAccessException("loss_ratio failed for policy " + policyId, e);
         }
     }
 
-    /** Finds open claims for a policy. Uses SYSDATE-based aging in SQL. */
+    /** Finds open claims for a policy. */
     public List<Claim> findOpenClaims(long policyId) {
         String sql =
             "SELECT claim_id, claim_number, policy_id, loss_date, reported_date, "
           + "       claim_type, status, reserve_amount, paid_amount, description "
-          + "  FROM hartford.claim "
+          + "  FROM hartford.claims.claim "
           + " WHERE policy_id = ? "
           + "   AND status IN ('OPEN', 'INVESTIGATING') "
           + " ORDER BY reported_date DESC";
