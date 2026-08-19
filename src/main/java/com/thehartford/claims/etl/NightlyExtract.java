@@ -4,27 +4,26 @@ import com.thehartford.claims.config.DataSourceFactory;
 import com.thehartford.claims.dao.DataAccessException;
 
 import javax.sql.DataSource;
-import java.io.BufferedWriter;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 
 /**
- * Nightly batch that extracts recently changed claims to a pipe-delimited file
- * for the downstream data warehouse feed.
+ * Nightly batch that hands recently changed claims to the downstream warehouse.
  *
- * <p>MIGRATION NOTE: today this reads from Oracle and writes a flat file that an
- * external process SFTPs to the warehouse. The Snowflake target replaces this
- * whole pattern with {@code COPY INTO @stage} (or Snowpipe) directly against a
- * cloud stage, eliminating the flat-file hop. This class also uses Oracle
- * {@code TRUNC(SYSDATE)} and {@code TO_CHAR} which do not port verbatim.</p>
+ * <p>The Oracle version selected a {@code TRUNC(SYSDATE) - 1} window and wrote a
+ * pipe-delimited file for an external SFTP hop. On Snowflake the rows never leave
+ * the platform: {@link #unloadChangedClaims} runs {@code COPY INTO @stage}
+ * against the CDC stream drained by {@code tsk_claim_cdc} (see
+ * {@code db/snowflake/04_streams_tasks.sql}), and the warehouse loads from the
+ * same stage via Snowpipe. {@link #unloadBackfillWindow} keeps a date-window
+ * unload available for reloads.</p>
  */
 public class NightlyExtract {
+
+    private static final String DEFAULT_STAGE = "@hartford.claims.claims_stage/claims";
 
     private final DataSource dataSource;
 
@@ -36,49 +35,78 @@ public class NightlyExtract {
         this.dataSource = dataSource;
     }
 
-    public int extractChangedClaims(Path outputFile) {
-        // Oracle-specific: TRUNC(SYSDATE) - 1 => "since midnight yesterday".
-        String sql =
-            "SELECT cl.claim_id, cl.claim_number, cl.policy_id, "
-          + "       TO_CHAR(cl.reported_date, 'YYYY-MM-DD HH24:MI:SS') AS reported, "
-          + "       cl.status, cl.reserve_amount, cl.paid_amount "
-          + "  FROM hartford.claim cl "
-          + " WHERE cl.reported_date >= TRUNC(SYSDATE) - 1 "
-          + " ORDER BY cl.claim_id";
+    /**
+     * Unloads the claim changes captured since the last run to the cloud stage
+     * and clears the feed. Returns the number of rows written.
+     */
+    public int unloadChangedClaims(String stagePath) {
+        String copy =
+            "COPY INTO " + stagePath + "/claims_cdc_ "
+          + "FROM (SELECT claim_id, claim_number, policy_id, reported_date, status, "
+          + "             reserve_amount, paid_amount, change_action "
+          + "        FROM hartford.claims.claim_change_feed "
+          + "       ORDER BY claim_id) "
+          + "FILE_FORMAT = (TYPE = CSV COMPRESSION = GZIP FIELD_DELIMITER = '|' "
+          + "               NULL_IF = ('') EMPTY_FIELD_AS_NULL = FALSE) "
+          + "HEADER = TRUE OVERWRITE = FALSE";
 
-        int rowCount = 0;
+        try (Connection conn = dataSource.getConnection()) {
+            int rows = copyInto(conn, copy);
+            try (Statement st = conn.createStatement()) {
+                st.executeUpdate("DELETE FROM hartford.claims.claim_change_feed");
+            }
+            return rows;
+        } catch (SQLException e) {
+            throw new DataAccessException("Nightly claim unload failed", e);
+        }
+    }
+
+    /**
+     * Reload path: unloads a trailing window of claims (the equivalent of the
+     * former {@code TRUNC(SYSDATE) - 1} scan, expressed with DATEADD).
+     */
+    public int unloadBackfillWindow(String stagePath, int days) {
+        String copy =
+            "COPY INTO " + stagePath + "/claims_backfill_ "
+          + "FROM (SELECT claim_id, claim_number, policy_id, reported_date, status, "
+          + "             reserve_amount, paid_amount "
+          + "        FROM hartford.claims.claim "
+          + "       WHERE reported_date >= "
+          + "             DATEADD('day', ?, DATE_TRUNC('DAY', CURRENT_TIMESTAMP())) "
+          + "       ORDER BY claim_id) "
+          + "FILE_FORMAT = (TYPE = CSV COMPRESSION = GZIP FIELD_DELIMITER = '|') "
+          + "HEADER = TRUE OVERWRITE = TRUE";
+
         try (Connection conn = dataSource.getConnection();
-             Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery(sql);
-             BufferedWriter writer = Files.newBufferedWriter(outputFile)) {
-
-            ResultSetMetaData md = rs.getMetaData();
-            int cols = md.getColumnCount();
-
-            while (rs.next()) {
-                StringBuilder line = new StringBuilder();
-                for (int i = 1; i <= cols; i++) {
-                    if (i > 1) {
-                        line.append('|');
-                    }
-                    String v = rs.getString(i);
-                    line.append(v == null ? "" : v);
-                }
-                writer.write(line.toString());
-                writer.newLine();
-                rowCount++;
+             PreparedStatement ps = conn.prepareStatement(copy)) {
+            ps.setInt(1, -Math.abs(days));
+            try (ResultSet rs = ps.executeQuery()) {
+                return rowsUnloaded(rs);
             }
         } catch (SQLException e) {
-            throw new DataAccessException("Nightly claim extract failed", e);
-        } catch (IOException e) {
-            throw new RuntimeException("Failed writing extract file " + outputFile, e);
+            throw new DataAccessException("Claim backfill unload failed", e);
         }
-        return rowCount;
+    }
+
+    private int copyInto(Connection conn, String copy) throws SQLException {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(copy)) {
+            return rowsUnloaded(rs);
+        }
+    }
+
+    /** COPY INTO &lt;location&gt; reports rows_unloaded in its result set. */
+    private int rowsUnloaded(ResultSet rs) throws SQLException {
+        int rows = 0;
+        while (rs.next()) {
+            rows += rs.getInt("rows_unloaded");
+        }
+        return rows;
     }
 
     public static void main(String[] args) {
-        Path out = Path.of(args.length > 0 ? args[0] : "claims_extract.psv");
-        int n = new NightlyExtract().extractChangedClaims(out);
-        System.out.println("Wrote " + n + " changed claim rows to " + out);
+        String stage = args.length > 0 ? args[0] : DEFAULT_STAGE;
+        int n = new NightlyExtract().unloadChangedClaims(stage);
+        System.out.println("Unloaded " + n + " changed claim rows to " + stage);
     }
 }
