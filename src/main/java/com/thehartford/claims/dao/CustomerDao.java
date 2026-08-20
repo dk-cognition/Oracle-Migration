@@ -13,11 +13,10 @@ import java.sql.Statement;
 /**
  * Data access for customers.
  *
- * <p>MIGRATION NOTE: {@link #insert} relies on {@code seq_customer_id.NEXTVAL}
- * being applied by the {@code trg_customer_biu} row trigger, then reads the
- * generated key back with Oracle's {@code getGeneratedKeys()} using ROWID.
- * Snowflake has neither row triggers nor ROWID; use an IDENTITY/AUTOINCREMENT
- * column or an explicit sequence in the INSERT. See docs/MIGRATION.md.</p>
+ * <p>{@link #insert} relies on the {@code customer_id} AUTOINCREMENT default in
+ * Snowflake. The driver supports neither {@code getGeneratedKeys()} nor
+ * {@code CURRVAL}, so the assigned id is read back by re-querying on the
+ * business key just inserted. See docs/MIGRATION.md.</p>
  */
 public class CustomerDao {
 
@@ -33,29 +32,40 @@ public class CustomerDao {
         this.sql = SqlLibrary.fromResource("/sql/reports.sql");
     }
 
-    /** Inserts a customer, letting the Oracle trigger assign the id from a sequence. */
+    /** Inserts a customer, letting the AUTOINCREMENT column assign the id. */
     public long insert(String firstName, String lastName, String email) {
         String insert =
             "INSERT INTO hartford.customer (first_name, last_name, email) VALUES (?, ?, ?)";
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps =
-                 conn.prepareStatement(insert, new String[] {"CUSTOMER_ID"})) {
-            ps.setString(1, firstName);
-            ps.setString(2, lastName);
-            ps.setString(3, email);
-            ps.executeUpdate();
-            try (ResultSet keys = ps.getGeneratedKeys()) {
-                if (keys.next()) {
-                    return keys.getLong(1);
+        // Snowflake JDBC supports neither getGeneratedKeys() nor CURRVAL:
+        // re-query for the id assigned to the row just inserted.
+        String readBack =
+            "SELECT MAX(customer_id) FROM hartford.customer "
+          + " WHERE first_name = ? AND last_name = ? "
+          + "   AND COALESCE(email, '') = COALESCE(?, '')";
+        try (Connection conn = dataSource.getConnection()) {
+            try (PreparedStatement ps = conn.prepareStatement(insert)) {
+                ps.setString(1, firstName);
+                ps.setString(2, lastName);
+                ps.setString(3, email);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = conn.prepareStatement(readBack)) {
+                ps.setString(1, firstName);
+                ps.setString(2, lastName);
+                ps.setString(3, email);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next() && rs.getLong(1) > 0) {
+                        return rs.getLong(1);
+                    }
                 }
             }
-            throw new DataAccessException("No generated key returned for customer insert", null);
+            throw new DataAccessException("No generated key found for customer insert", null);
         } catch (SQLException e) {
             throw new DataAccessException("insert customer failed", e);
         }
     }
 
-    /** Upsert via the Oracle MERGE ... USING dual statement in reports.sql. */
+    /** Upsert via the MERGE statement in reports.sql. */
     public void upsert(long customerId, String firstName, String lastName, String email) {
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql.get("customer_upsert"))) {
@@ -69,9 +79,14 @@ public class CustomerDao {
         }
     }
 
-    /** Reads the next customer id straight from the Oracle sequence via DUAL. */
+    /**
+     * Estimates the next customer id. The AUTOINCREMENT default replaces the
+     * Oracle sequence + trigger, and Snowflake has no CURRVAL/DUAL, so this
+     * peeks at the current maximum instead. Ids are not gap-free; treat the
+     * result as advisory only.
+     */
     public long peekNextId() {
-        String q = "SELECT hartford.seq_customer_id.NEXTVAL FROM dual";
+        String q = "SELECT MAX(customer_id) + 1 FROM hartford.customer";
         try (Connection conn = dataSource.getConnection();
              Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(q)) {
