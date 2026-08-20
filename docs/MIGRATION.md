@@ -3,6 +3,11 @@
 This document catalogs every Oracle-specific construct in this repository and its
 Snowflake equivalent. It is the working checklist for the migration demo.
 
+> **Status: migration complete.** All Snowflake artifacts live in `db/snowflake/`
+> (mirroring `db/oracle/` file names, plus `05_etl.sql` for the stage/Stream/Task
+> objects), the Java layer targets `snowflake-jdbc`, and `application.properties`
+> is cut over. Checkboxes below track each work item.
+
 > Scope: schema DDL, PL/SQL, reporting SQL, the Java JDBC data-access layer, and
 > the nightly batch/ETL flow.
 
@@ -100,10 +105,35 @@ Files to touch: `DataSourceFactory`, `ClaimDao` (all `CallableStatement` calls),
 
 ## 9. Suggested migration order (demo script)
 
-1. Translate DDL (`db/oracle/01_schema.sql` → `db/snowflake/01_schema.sql`).
-2. Rewrite views (`03_views.sql`) — remove `(+)`, `ROWNUM`.
-3. Re-implement `claims_pkg` as Snowflake procedures.
-4. Convert reporting SQL in `src/main/resources/sql/reports.sql`.
-5. Swap the JDBC driver/config and rework `CallableStatement` calls.
-6. Replace the flat-file ETL with `COPY INTO`/Snowpipe.
-7. Re-point `application.properties` to the Snowflake datasource block.
+- [x] 1. Translate DDL (`db/oracle/01_schema.sql` → `db/snowflake/01_schema.sql`).
+      Types mapped (`VARCHAR2`→`VARCHAR`, `DATE`→`TIMESTAMP_NTZ`, `CLOB`→`VARCHAR`,
+      unbounded `NUMBER`→`NUMBER(38,0)`/`FLOAT` for `risk_score`); trigger-driven PKs
+      → `AUTOINCREMENT` (customer/policy) or `DEFAULT seq.NEXTVAL` (claim/payment);
+      tablespaces and all indexes (incl. `ix_cust_upper_name`) dropped.
+- [x] 2. Rewrite views (`db/snowflake/03_views.sql`) — `(+)`→`LEFT JOIN`,
+      `ROWNUM`→`QUALIFY ROW_NUMBER()`, `DECODE`→`CASE`, `NVL`→`COALESCE`;
+      `mv_daily_paid` kept as a Snowflake MV with `REFRESH FAST ON COMMIT` dropped.
+- [x] 3. Re-implement `claims_pkg` as standalone objects in
+      `db/snowflake/02_procedures.sql`: `open_claim`/`post_payment` procedures
+      (Snowflake Scripting, `RAISE`/`EXCEPTION` instead of
+      `RAISE_APPLICATION_ERROR`, re-query instead of `RETURNING ... INTO`, no
+      explicit `COMMIT` — caller owns the transaction), `loss_ratio` and
+      `fn_customer_full_name` as SQL UDFs, `g_default_reserve` as the
+      `fn_default_reserve()` scalar UDF.
+- [x] 4. Convert reporting SQL in `src/main/resources/sql/reports.sql`
+      (`CONNECT BY`→`WITH RECURSIVE`, `ROWNUM`→`QUALIFY`, `ADD_MONTHS`→`DATEADD`,
+      `TO_CHAR`→`TO_VARCHAR`, `NVL2`→`IFF`, `MERGE` without `FROM dual`).
+      Seed data converted in `db/snowflake/04_seed_data.sql`.
+- [x] 5. Swap the JDBC driver/config and rework `CallableStatement` calls:
+      `pom.xml` now uses `snowflake-jdbc`; `DataSourceFactory` drops TNS +
+      Oracle pool props and passes warehouse/db/schema/role; `ClaimDao` uses
+      `CALL`-as-result-set and `SELECT loss_ratio(?)`; `CustomerDao` re-queries
+      instead of `getGeneratedKeys()`/`CURRVAL`. Password env var is now
+      `SNOWFLAKE_APP_PASSWORD`.
+- [x] 6. Replace the flat-file ETL with `COPY INTO`/Snowpipe: `NightlyExtract`
+      unloads with `COPY INTO @claims_stage`; `db/snowflake/05_etl.sql` defines
+      the stage, file format, `claim_changes` Stream + nightly Task (CDC replaces
+      `TRUNC(SYSDATE) - 1`), and an optional Snowpipe; the SQL*Plus spool script
+      `scripts/export_oracle_to_stage.sh` is deleted.
+- [x] 7. Re-point `application.properties` to the Snowflake datasource block
+      (Oracle block removed, `USE SCHEMA` init SQL) and delete `tnsnames.ora`.
