@@ -11,10 +11,8 @@ import java.util.Properties;
 /**
  * Builds the application {@link DataSource} from application.properties.
  *
- * <p>MIGRATION NOTE: this factory is hard-wired to the Oracle thin driver and a
- * TNS descriptor. Migrating to Snowflake means swapping the driver, dropping the
- * {@code oracle.net.tns_admin} system property, and using a Snowflake account URL
- * plus warehouse/role. See docs/MIGRATION.md.</p>
+ * <p>Connects to Snowflake: the account URL carries the warehouse, database,
+ * schema, and role, so there is no TNS descriptor and no connection init SQL.</p>
  */
 public final class DataSourceFactory {
 
@@ -37,36 +35,46 @@ public final class DataSourceFactory {
     private static HikariDataSource build() {
         Properties props = load("/application.properties");
 
-        // Oracle TNS resolution depends on this JVM system property.
-        String tnsAdmin = props.getProperty("db.tns.admin");
-        if (tnsAdmin != null) {
-            System.setProperty("oracle.net.tns_admin", tnsAdmin);
-        }
-
         HikariConfig cfg = new HikariConfig();
         cfg.setDriverClassName(props.getProperty("db.driver"));
-        cfg.setJdbcUrl(props.getProperty("db.url"));
+        cfg.setJdbcUrl(jdbcUrl(props));
         cfg.setUsername(props.getProperty("db.username"));
         cfg.setPassword(resolvePassword());
         cfg.setMaximumPoolSize(Integer.parseInt(props.getProperty("db.pool.maxSize", "10")));
 
-        String initSql = props.getProperty("db.pool.connectionInitSql");
-        if (initSql != null) {
-            cfg.setConnectionInitSql(initSql);
-        }
-
-        // Oracle-specific tuning that has no Snowflake equivalent.
-        cfg.addDataSourceProperty("oracle.jdbc.implicitStatementCacheSize", "50");
-        cfg.addDataSourceProperty("defaultRowPrefetch", "500");
-
         return new HikariDataSource(cfg);
     }
 
+    /** Appends the Snowflake session settings to the account URL as query parameters. */
+    static String jdbcUrl(Properties props) {
+        StringBuilder url = new StringBuilder(require(props, "db.url"));
+        char separator = url.indexOf("?") >= 0 ? '&' : '?';
+        for (String key : new String[] {"db.warehouse", "db.database", "db.schema", "db.role"}) {
+            String value = props.getProperty(key);
+            if (value != null && !value.isEmpty()) {
+                url.append(separator)
+                   .append(key.substring("db.".length()))
+                   .append('=')
+                   .append(value);
+                separator = '&';
+            }
+        }
+        return url.toString();
+    }
+
+    private static String require(Properties props, String key) {
+        String value = props.getProperty(key);
+        if (value == null || value.isEmpty()) {
+            throw new IllegalStateException("Missing required property: " + key);
+        }
+        return value;
+    }
+
     private static String resolvePassword() {
-        String pw = System.getenv("ORACLE_APP_PASSWORD");
+        String pw = System.getenv("SNOWFLAKE_APP_PASSWORD");
         if (pw == null || pw.isEmpty()) {
             throw new IllegalStateException(
-                "ORACLE_APP_PASSWORD is not set; cannot connect to Oracle.");
+                "SNOWFLAKE_APP_PASSWORD is not set; cannot connect to Snowflake.");
         }
         return pw;
     }
