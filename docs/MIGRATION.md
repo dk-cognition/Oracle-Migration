@@ -6,6 +6,10 @@ Snowflake equivalent. It is the working checklist for the migration demo.
 > Scope: schema DDL, PL/SQL, reporting SQL, the Java JDBC data-access layer, and
 > the nightly batch/ETL flow.
 
+**Status: migration complete.** The Snowflake artifacts live in `db/snowflake/`
+and the Java/config layers now target Snowflake; `db/oracle/` is retained as the
+source-system reference. Section 9 tracks the item-by-item status.
+
 ---
 
 ## 1. Data types
@@ -98,12 +102,50 @@ Files to touch: `DataSourceFactory`, `ClaimDao` (all `CallableStatement` calls),
   **Snowpipe** for continuous load, eliminating the flat-file hop.
 - `TRUNC(SYSDATE) - 1` window logic → `DATEADD` / Streams for CDC.
 
-## 9. Suggested migration order (demo script)
+## 9. Migration order / status
 
-1. Translate DDL (`db/oracle/01_schema.sql` → `db/snowflake/01_schema.sql`).
-2. Rewrite views (`03_views.sql`) — remove `(+)`, `ROWNUM`.
-3. Re-implement `claims_pkg` as Snowflake procedures.
-4. Convert reporting SQL in `src/main/resources/sql/reports.sql`.
-5. Swap the JDBC driver/config and rework `CallableStatement` calls.
-6. Replace the flat-file ETL with `COPY INTO`/Snowpipe.
-7. Re-point `application.properties` to the Snowflake datasource block.
+- [x] **1. DDL** — `db/snowflake/01_schema.sql`: types remapped per section 1,
+      tablespaces and all indexes dropped (clustering keys replace the access
+      paths), sequence-driven `BEFORE INSERT` triggers replaced by column
+      `DEFAULT seq.NEXTVAL` / `DEFAULT CURRENT_TIMESTAMP()`, and a
+      `claims_config` table holding the former `g_default_reserve` constant.
+- [x] **2. Views** — `db/snowflake/03_views.sql`: `(+)` → `LEFT JOIN`,
+      `ROWNUM` → `QUALIFY ROW_NUMBER()`, `DECODE` → `CASE`, `NVL` →
+      `COALESCE`, the `CONNECT BY` org chart → `WITH RECURSIVE`
+      (`vw_agent_org_chart`), and `mv_daily_paid` keeps its single-table
+      aggregate shape without the `BUILD IMMEDIATE` / `REFRESH FAST ON COMMIT`
+      clauses.
+- [x] **3. PL/SQL** — `db/snowflake/02_procedures.sql`: `claims_pkg` split into
+      `sp_open_claim`, `sp_post_payment`, `fn_loss_ratio`, `fn_default_reserve`,
+      plus `fn_customer_full_name`. `RAISE_APPLICATION_ERROR` → Scripting
+      `EXCEPTION` + `RAISE`; `UPDATE ... RETURNING INTO` → re-query. Trigger
+      side effects live in `db/snowflake/04_streams_tasks.sql` as Streams +
+      Tasks.
+- [x] **4. Reporting SQL / seed data** — `src/main/resources/sql/reports.sql`
+      rewritten (`SYSDATE`, `ADD_MONTHS`, `NVL`/`NVL2`, `TO_CHAR`, `FROM dual`,
+      `MERGE`), seed data in `db/snowflake/04_seed_data.sql`.
+- [x] **5. JDBC layer** — `snowflake-jdbc` replaces `ojdbc11` in `pom.xml`;
+      `DataSourceFactory` builds the account URL from
+      `db.warehouse`/`db.database`/`db.schema`/`db.role` and drops
+      `oracle.net.tns_admin`, the init SQL, and the vendor pool props;
+      `ClaimDao` uses `CALL`/`SELECT` instead of `{ ? = call ... }`;
+      `CustomerDao.insert` claims the id from the sequence (`peekNextId` →
+      `nextId`, no `FROM dual`, no `getGeneratedKeys()`).
+- [x] **6. ETL** — `NightlyExtract` now drives `COPY INTO @claims_stage` off the
+      `strm_claim_cdc` stream (with a `DATEADD` backfill variant), inbound load
+      is `COPY INTO`/Snowpipe in `db/snowflake/05_ingest.sql`, and
+      `scripts/export_oracle_to_stage.sh` is replaced by
+      `scripts/load_stage_to_snowflake.sh`.
+- [x] **7. Config** — `application.properties` carries only the Snowflake
+      datasource (password from `SNOWFLAKE_APP_PASSWORD`); `tnsnames.ora` is
+      deleted.
+
+### Carried-over caveats
+
+- Snowflake parses but does not enforce `CHECK`, `UNIQUE`, or `NOT NULL`-adjacent
+  constraints, so the Oracle status domains and the `claim_number` uniqueness are
+  enforced in `sp_open_claim` / the load pipeline instead.
+- Snowflake sequences are not gap-free and have no `CURRVAL`, so ids are claimed
+  before the insert rather than read back afterwards.
+- Procedures autocommit per statement; the Oracle `COMMIT` inside
+  `post_payment` has no equivalent and transaction boundaries move to the caller.
