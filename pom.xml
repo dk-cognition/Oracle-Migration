@@ -12,7 +12,7 @@
   <name>Hartford Claims Data Store</name>
   <description>
     P&amp;C policy administration + claims data access layer, currently backed by
-    Oracle 19c. Target of an Oracle-to-Snowflake migration demo.
+    Snowflake. Reference implementation for a cloud data-platform migration.
   </description>
 
   <properties>
@@ -22,11 +22,11 @@
   </properties>
 
   <dependencies>
-    <!-- Oracle JDBC driver (ojdbc). Snowflake migration => swap for snowflake-jdbc. -->
+    <!-- Snowflake JDBC driver. -->
     <dependency>
-      <groupId>com.oracle.database.jdbc</groupId>
-      <artifactId>ojdbc11</artifactId>
-      <version>23.4.0.24.05</version>
+      <groupId>net.snowflake</groupId>
+      <artifactId>snowflake-jdbc</artifactId>
+      <version>3.24.2</version>
     </dependency>
 
     <!-- Connection pool -->
