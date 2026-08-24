@@ -98,7 +98,7 @@ Snowflake has **no row-level triggers**. Re-express:
 | `ADD_MONTHS(d, n)` | `DATEADD('month', n, d)` |
 | `SYSDATE - reported_date` (day diff) | `DATEDIFF('day', reported_date, CURRENT_TIMESTAMP())` |
 | `TO_CHAR(d, 'YYYY-MM')` | `TO_VARCHAR(d, 'YYYY-MM')` |
-| `REGEXP_LIKE(c, p)` | `REGEXP_LIKE(c, p)` (supported; anchoring differs) |
+| `REGEXP_LIKE(c, p)` | `REGEXP_LIKE(c, p)` (supported; Snowflake implicitly full-matches, so use `860-.*` for a starts-with prefix) |
 | `... FROM dual` | drop the `FROM dual` |
 | `MERGE ... USING (SELECT ... FROM dual)` | `MERGE ... USING (SELECT ... ) src` |
 

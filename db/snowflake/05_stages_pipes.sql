@@ -2,7 +2,7 @@
 -- The Hartford - Claims Data Store
 -- Cloud-stage file format, external stage, and Snowpipe definitions.
 --
--- Set HARTFORD_CLAIMS_STAGE_URL and the storage integration for the target
+-- Replace the bucket and storage integration placeholders for the target
 -- account before applying this file. Snowpipe loads claim/customer files
 -- continuously; the batch loader also supports idempotent COPY INTO loads.
 --------------------------------------------------------------------------------
@@ -17,8 +17,8 @@ CREATE OR REPLACE FILE FORMAT hartford.claims_pipe_format
   NULL_IF = ('', 'NULL');
 
 CREATE OR REPLACE STAGE hartford.claims_stage
-  URL = 's3://HARTFORD_CLAIMS_STAGE_URL/'
-  STORAGE_INTEGRATION = HARTFORD_CLAIMS_STORAGE;
+  URL = 's3://<hartford-claims-bucket>/'
+  STORAGE_INTEGRATION = HARTFORD_CLAIMS_STORAGE_INTEGRATION_PLACEHOLDER;
 
 CREATE OR REPLACE PIPE hartford.claim_load_pipe
   AUTO_INGEST = TRUE

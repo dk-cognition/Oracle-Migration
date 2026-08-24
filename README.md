@@ -14,7 +14,7 @@ A small insurance back-office data layer:
 - **Claims** are booked against policies and paid out via **claim payments**.
 - A Java data-access layer + nightly batch feed a downstream warehouse.
 
-## Why it's a good migration target
+## What this migration demonstrates
 
 The repository includes a complete source-to-target migration. The source
 artifacts remain under `db/oracle`; the active implementation uses Snowflake
@@ -63,14 +63,13 @@ Runtime execution needs a live Snowflake account configured in
 `application.properties` and the `SNOWFLAKE_APP_PASSWORD` environment variable.
 The migration demo itself works statically over the SQL and Java sources.
 
-## Running the migration demo with Devin
+## Exploring the migration with Devin
 
-Point Devin at this repo and ask it to migrate a slice, e.g.:
+Point Devin at this repo and ask it to review or extend a migrated slice, e.g.:
 
-> "Migrate `db/oracle/03_views.sql` to Snowflake, writing the result to
-> `db/snowflake/03_views.sql`, and update `docs/MIGRATION.md`."
+> "Review `db/snowflake/03_views.sql` against the source mapping in
+> `docs/MIGRATION.md` and suggest any improvements."
 
 or
 
-> "Swap the JDBC layer from Oracle to Snowflake and rewrite the queries in
-> `reports.sql`."
+> "Add a Snowflake-native report to `reports.sql` and its focused test."

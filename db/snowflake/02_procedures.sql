@@ -103,18 +103,14 @@ CREATE OR REPLACE FUNCTION hartford.loss_ratio(p_policy_id NUMBER)
   LANGUAGE SQL
   AS
   $$
-    SELECT COALESCE(
-             ROUND(
-               COALESCE((SELECT SUM(c.paid_amount)
-                           FROM hartford.claim c
-                          WHERE c.policy_id = p.policy_id), 0)
-               / NULLIF(p.annual_premium, 0),
-               4
-             ),
-             0
-           )
+    SELECT CASE
+             WHEN COALESCE(p.annual_premium, 0) = 0 THEN 0
+             ELSE ROUND(COALESCE(SUM(cl.paid_amount), 0) / p.annual_premium, 4)
+           END
       FROM hartford.policy p
+      LEFT JOIN hartford.claim cl ON p.policy_id = cl.policy_id
      WHERE p.policy_id = p_policy_id
+     GROUP BY p.annual_premium
   $$;
 
 CREATE OR REPLACE FUNCTION hartford.fn_customer_full_name(p_customer_id NUMBER)

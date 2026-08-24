@@ -7,6 +7,7 @@ USE SCHEMA hartford;
 
 -- Inserts are handled by column defaults. Writers should ideally set updated_ts
 -- directly; this task covers changed rows that need the old trigger semantics.
+-- The age guard below prevents this task's own UPDATE from retriggering it.
 CREATE OR REPLACE STREAM hartford.customer_changes
   ON TABLE hartford.customer;
 
@@ -21,4 +22,5 @@ AS
      SELECT customer_id
        FROM hartford.customer_changes
       WHERE METADATA$ACTION IN ('INSERT', 'UPDATE')
-   );
+   )
+     AND updated_ts < DATEADD('second', -5, CURRENT_TIMESTAMP());

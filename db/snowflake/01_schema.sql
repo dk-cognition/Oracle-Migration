@@ -26,7 +26,7 @@ CREATE SEQUENCE hartford.seq_claim_id    START = 900000 INCREMENT = 1;
 -- CUSTOMER
 --------------------------------------------------------------------------------
 CREATE TABLE hartford.customer (
-  customer_id      NUMBER(12)        NOT NULL DEFAULT hartford.seq_customer_id.NEXTVAL,
+  customer_id      NUMBER(12)        DEFAULT hartford.seq_customer_id.NEXTVAL NOT NULL,
   first_name       VARCHAR(60),
   last_name        VARCHAR(60),
   ssn              VARCHAR(11),
@@ -58,7 +58,7 @@ CREATE TABLE hartford.agent (
 -- POLICY
 --------------------------------------------------------------------------------
 CREATE TABLE hartford.policy (
-  policy_id        NUMBER(12)    NOT NULL AUTOINCREMENT START 500000 INCREMENT 1,
+  policy_id        NUMBER(12)    AUTOINCREMENT START 500000 INCREMENT 1 NOT NULL,
   policy_number    VARCHAR(20)   NOT NULL,
   customer_id      NUMBER(12)    NOT NULL,
   agent_id         NUMBER(10),
@@ -82,7 +82,7 @@ CREATE TABLE hartford.policy (
 -- CLAIM
 --------------------------------------------------------------------------------
 CREATE TABLE hartford.claim (
-  claim_id         NUMBER(12)    NOT NULL DEFAULT hartford.seq_claim_id.NEXTVAL,
+  claim_id         NUMBER(12)    DEFAULT hartford.seq_claim_id.NEXTVAL NOT NULL,
   claim_number     VARCHAR(24)   NOT NULL,
   policy_id        NUMBER(12)    NOT NULL,
   loss_date        TIMESTAMP_NTZ NOT NULL,
@@ -104,7 +104,7 @@ CREATE TABLE hartford.claim (
 -- CLAIM_PAYMENT
 --------------------------------------------------------------------------------
 CREATE TABLE hartford.claim_payment (
-  payment_id       NUMBER(14)    NOT NULL AUTOINCREMENT START 1 INCREMENT 1,
+  payment_id       NUMBER(14)    AUTOINCREMENT START 1 INCREMENT 1 NOT NULL,
   claim_id         NUMBER(12)    NOT NULL,
   payment_date     TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP() NOT NULL,
   amount           NUMBER(14,2)  NOT NULL,

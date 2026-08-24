@@ -78,5 +78,5 @@ SELECT c.customer_id,
        RANK() OVER (ORDER BY c.risk_score DESC) AS risk_rank
   FROM hartford.customer c
  WHERE c.risk_score > 0.6
-   AND REGEXP_LIKE(c.phone, '^860-')
+   AND REGEXP_LIKE(c.phone, '860-.*')
  ORDER BY risk_rank;
