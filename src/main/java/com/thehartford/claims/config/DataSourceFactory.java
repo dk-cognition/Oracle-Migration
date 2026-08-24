@@ -6,15 +6,15 @@ import com.zaxxer.hikari.HikariDataSource;
 import javax.sql.DataSource;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 
 /**
  * Builds the application {@link DataSource} from application.properties.
  *
- * <p>MIGRATION NOTE: this factory is hard-wired to the Oracle thin driver and a
- * TNS descriptor. Migrating to Snowflake means swapping the driver, dropping the
- * {@code oracle.net.tns_admin} system property, and using a Snowflake account URL
- * plus warehouse/role. See docs/MIGRATION.md.</p>
+ * <p>The Snowflake account URL, warehouse, database, schema, and role are
+ * configured in application.properties. See docs/MIGRATION.md.</p>
  */
 public final class DataSourceFactory {
 
@@ -37,15 +37,9 @@ public final class DataSourceFactory {
     private static HikariDataSource build() {
         Properties props = load("/application.properties");
 
-        // Oracle TNS resolution depends on this JVM system property.
-        String tnsAdmin = props.getProperty("db.tns.admin");
-        if (tnsAdmin != null) {
-            System.setProperty("oracle.net.tns_admin", tnsAdmin);
-        }
-
         HikariConfig cfg = new HikariConfig();
         cfg.setDriverClassName(props.getProperty("db.driver"));
-        cfg.setJdbcUrl(props.getProperty("db.url"));
+        cfg.setJdbcUrl(buildJdbcUrl(props));
         cfg.setUsername(props.getProperty("db.username"));
         cfg.setPassword(resolvePassword());
         cfg.setMaximumPoolSize(Integer.parseInt(props.getProperty("db.pool.maxSize", "10")));
@@ -55,18 +49,33 @@ public final class DataSourceFactory {
             cfg.setConnectionInitSql(initSql);
         }
 
-        // Oracle-specific tuning that has no Snowflake equivalent.
-        cfg.addDataSourceProperty("oracle.jdbc.implicitStatementCacheSize", "50");
-        cfg.addDataSourceProperty("defaultRowPrefetch", "500");
-
         return new HikariDataSource(cfg);
     }
 
+    private static String buildJdbcUrl(Properties props) {
+        String base = props.getProperty("db.url");
+        List<String> parameters = new ArrayList<>();
+        addParameter(parameters, "warehouse", props.getProperty("db.warehouse"));
+        addParameter(parameters, "db", props.getProperty("db.database"));
+        addParameter(parameters, "schema", props.getProperty("db.schema"));
+        addParameter(parameters, "role", props.getProperty("db.role"));
+        if (parameters.isEmpty()) {
+            return base;
+        }
+        return base + (base.contains("?") ? "&" : "?") + String.join("&", parameters);
+    }
+
+    private static void addParameter(List<String> parameters, String name, String value) {
+        if (value != null && !value.isEmpty()) {
+            parameters.add(name + "=" + value);
+        }
+    }
+
     private static String resolvePassword() {
-        String pw = System.getenv("ORACLE_APP_PASSWORD");
+        String pw = System.getenv("SNOWFLAKE_APP_PASSWORD");
         if (pw == null || pw.isEmpty()) {
             throw new IllegalStateException(
-                "ORACLE_APP_PASSWORD is not set; cannot connect to Oracle.");
+                "SNOWFLAKE_APP_PASSWORD is not set; cannot connect to Snowflake.");
         }
         return pw;
     }
