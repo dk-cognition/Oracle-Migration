@@ -100,10 +100,16 @@ Files to touch: `DataSourceFactory`, `ClaimDao` (all `CallableStatement` calls),
 
 ## 9. Suggested migration order (demo script)
 
-1. Translate DDL (`db/oracle/01_schema.sql` → `db/snowflake/01_schema.sql`).
-2. Rewrite views (`03_views.sql`) — remove `(+)`, `ROWNUM`.
-3. Re-implement `claims_pkg` as Snowflake procedures.
-4. Convert reporting SQL in `src/main/resources/sql/reports.sql`.
-5. Swap the JDBC driver/config and rework `CallableStatement` calls.
-6. Replace the flat-file ETL with `COPY INTO`/Snowpipe.
-7. Re-point `application.properties` to the Snowflake datasource block.
+- [x] 1. Translate DDL (`db/oracle/01_schema.sql` → `db/snowflake/01_schema.sql`).
+- [x] 2. Rewrite views (`03_views.sql`) — remove `(+)`, `ROWNUM`.
+- [x] 3. Re-implement `claims_pkg` as Snowflake procedures
+  (`db/snowflake/02_procedures.sql`; trigger/MV logic in
+  `db/snowflake/04_streams_tasks.sql`, seed data in `db/snowflake/04_seed_data.sql`).
+- [x] 4. Convert reporting SQL in `src/main/resources/sql/reports.sql`.
+- [x] 5. Swap the JDBC driver/config and rework `CallableStatement` calls
+  (`DataSourceFactory`, `ClaimDao`, `CustomerDao`; `tnsnames.ora` deleted,
+  `ojdbc11` → `snowflake-jdbc` in `pom.xml`).
+- [x] 6. Replace the flat-file ETL with `COPY INTO`/Snowpipe
+  (`NightlyExtract` unloads via `COPY INTO @claims_stage`;
+  `export_oracle_to_stage.sh` → `scripts/load_snowflake_stage.sh`).
+- [x] 7. Re-point `application.properties` to the Snowflake datasource block.
