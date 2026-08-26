@@ -11,10 +11,8 @@ import java.util.Properties;
 /**
  * Builds the application {@link DataSource} from application.properties.
  *
- * <p>MIGRATION NOTE: this factory is hard-wired to the Oracle thin driver and a
- * TNS descriptor. Migrating to Snowflake means swapping the driver, dropping the
- * {@code oracle.net.tns_admin} system property, and using a Snowflake account URL
- * plus warehouse/role. See docs/MIGRATION.md.</p>
+ * <p>Connects to Snowflake via the Snowflake JDBC driver using an account URL
+ * plus warehouse/database/schema/role session parameters. See docs/MIGRATION.md.</p>
  */
 public final class DataSourceFactory {
 
@@ -37,12 +35,6 @@ public final class DataSourceFactory {
     private static HikariDataSource build() {
         Properties props = load("/application.properties");
 
-        // Oracle TNS resolution depends on this JVM system property.
-        String tnsAdmin = props.getProperty("db.tns.admin");
-        if (tnsAdmin != null) {
-            System.setProperty("oracle.net.tns_admin", tnsAdmin);
-        }
-
         HikariConfig cfg = new HikariConfig();
         cfg.setDriverClassName(props.getProperty("db.driver"));
         cfg.setJdbcUrl(props.getProperty("db.url"));
@@ -55,18 +47,28 @@ public final class DataSourceFactory {
             cfg.setConnectionInitSql(initSql);
         }
 
-        // Oracle-specific tuning that has no Snowflake equivalent.
-        cfg.addDataSourceProperty("oracle.jdbc.implicitStatementCacheSize", "50");
-        cfg.addDataSourceProperty("defaultRowPrefetch", "500");
+        // Snowflake session context (warehouse/database/schema/role).
+        addIfPresent(cfg, props, "db.warehouse", "warehouse");
+        addIfPresent(cfg, props, "db.database", "db");
+        addIfPresent(cfg, props, "db.schema", "schema");
+        addIfPresent(cfg, props, "db.role", "role");
 
         return new HikariDataSource(cfg);
     }
 
+    private static void addIfPresent(HikariConfig cfg, Properties props,
+                                     String propKey, String dsProperty) {
+        String value = props.getProperty(propKey);
+        if (value != null && !value.isEmpty()) {
+            cfg.addDataSourceProperty(dsProperty, value);
+        }
+    }
+
     private static String resolvePassword() {
-        String pw = System.getenv("ORACLE_APP_PASSWORD");
+        String pw = System.getenv("SNOWFLAKE_APP_PASSWORD");
         if (pw == null || pw.isEmpty()) {
             throw new IllegalStateException(
-                "ORACLE_APP_PASSWORD is not set; cannot connect to Oracle.");
+                "SNOWFLAKE_APP_PASSWORD is not set; cannot connect to Snowflake.");
         }
         return pw;
     }
