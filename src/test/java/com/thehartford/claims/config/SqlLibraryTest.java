@@ -20,8 +20,8 @@ class SqlLibraryTest {
     }
 
     @Test
-    void orgChartQueryUsesConnectBy() {
-        assertTrue(lib.get("agent_org_chart").toUpperCase().contains("CONNECT BY"));
+    void orgChartQueryUsesRecursiveCte() {
+        assertTrue(lib.get("agent_org_chart").toUpperCase().contains("WITH RECURSIVE"));
     }
 
     @Test

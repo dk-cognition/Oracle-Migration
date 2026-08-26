@@ -100,10 +100,12 @@ Files to touch: `DataSourceFactory`, `ClaimDao` (all `CallableStatement` calls),
 
 ## 9. Suggested migration order (demo script)
 
-1. Translate DDL (`db/oracle/01_schema.sql` → `db/snowflake/01_schema.sql`).
-2. Rewrite views (`03_views.sql`) — remove `(+)`, `ROWNUM`.
-3. Re-implement `claims_pkg` as Snowflake procedures.
-4. Convert reporting SQL in `src/main/resources/sql/reports.sql`.
-5. Swap the JDBC driver/config and rework `CallableStatement` calls.
-6. Replace the flat-file ETL with `COPY INTO`/Snowpipe.
-7. Re-point `application.properties` to the Snowflake datasource block.
+1. [x] Translate DDL (`db/oracle/01_schema.sql` → `db/snowflake/01_schema.sql`).
+2. [x] Rewrite views (`03_views.sql`) — remove `(+)`, `ROWNUM`.
+3. [x] Re-implement `claims_pkg` as Snowflake procedures
+       (`db/snowflake/02_procedures.sql`; trigger logic → `04_streams_tasks.sql`).
+4. [x] Convert reporting SQL in `src/main/resources/sql/reports.sql`.
+5. [x] Swap the JDBC driver/config and rework `CallableStatement` calls.
+6. [x] Replace the flat-file ETL with `COPY INTO`/Snowpipe
+       (`db/snowflake/05_stage_and_pipe.sql`, `scripts/load_stage_to_snowflake.sh`).
+7. [x] Re-point `application.properties` to the Snowflake datasource block.
