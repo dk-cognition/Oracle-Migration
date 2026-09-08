@@ -1,9 +1,10 @@
 # Hartford Claims Data Store
 
 > **Demo repository.** Fictional Property & Casualty (P&C) policy administration
-> and claims-processing data store for *The Hartford*, currently backed by
-> **Oracle 19c**. It exists to showcase an **Oracle → Snowflake migration** with
-> Devin. All data, hostnames, and identifiers are synthetic.
+> and claims-processing data store for *The Hartford*, originally backed by
+> **Oracle 19c** and now migrated to **Snowflake**. It exists to showcase an
+> **Oracle → Snowflake migration** with Devin. All data, hostnames, and
+> identifiers are synthetic.
 
 ## What this system does
 
@@ -16,8 +17,9 @@ A small insurance back-office data layer:
 
 ## Why it's a good migration target
 
-The codebase is deliberately packed with Oracle-specific constructs that do **not**
-port 1:1 to Snowflake — the exact things a real migration has to find and rewrite:
+The Oracle source (`db/oracle/`) is deliberately packed with Oracle-specific
+constructs that do **not** port 1:1 to Snowflake — the exact things the migration
+had to find and rewrite:
 
 - `DATE`-with-time semantics, unbounded `NUMBER`, `VARCHAR2(n CHAR/BYTE)`, `CLOB`
 - Sequences + `.NEXTVAL` driven by `BEFORE INSERT` **triggers**
@@ -29,17 +31,17 @@ port 1:1 to Snowflake — the exact things a real migration has to find and rewr
 - An Oracle-thin JDBC config with `tnsnames.ora` and vendor-specific pool props
 
 See [`docs/MIGRATION.md`](docs/MIGRATION.md) for the full construct-by-construct
-Oracle→Snowflake mapping and a suggested migration order.
+Oracle→Snowflake mapping and the completed checklist.
 
 ## Layout
 
 ```
-db/oracle/            Oracle 19c DDL, PL/SQL, views, seed data (the source system)
-db/snowflake/         Empty target — the migration lands Snowflake artifacts here
-src/main/java/        Java 11 JDBC data-access layer, reports, nightly ETL
-src/main/resources/   application.properties, tnsnames.ora, externalized SQL
+db/oracle/            Oracle 19c DDL, PL/SQL, views, seed data (the legacy source system)
+db/snowflake/         Snowflake DDL, procedures, views, streams/tasks, stages/pipe, seed data
+src/main/java/        Java 11 JDBC data-access layer (Snowflake driver), reports, nightly unload
+src/main/resources/   application.properties, externalized Snowflake SQL
 src/test/java/        Unit tests (no live DB required)
-scripts/              Legacy Oracle flat-file export (to be replaced by COPY INTO)
+scripts/              One-time COPY INTO cut-over load from the inbound stage
 docs/MIGRATION.md     Oracle → Snowflake migration guide / checklist
 ```
 
@@ -47,12 +49,15 @@ docs/MIGRATION.md     Oracle → Snowflake migration guide / checklist
 
 | File | Role |
 |------|------|
-| `db/oracle/01_schema.sql` | Tables, sequences, constraints, indexes, tablespace |
-| `db/oracle/02_packages.sql` | `claims_pkg` package + functions + triggers |
-| `db/oracle/03_views.sql` | Reporting views (`(+)`, `ROWNUM`, `DECODE`) + MV |
-| `src/main/resources/sql/reports.sql` | Named reporting queries (Oracle-isms) |
-| `src/.../dao/ClaimDao.java` | Calls the PL/SQL package via `CallableStatement` |
-| `src/.../etl/NightlyExtract.java` | Flat-file nightly extract |
+| `db/oracle/*.sql` | Legacy Oracle schema, `claims_pkg`, views (reference only) |
+| `db/snowflake/01_schema.sql` | Snowflake tables + sequences as column defaults |
+| `db/snowflake/02_procedures.sql` | `claims_pkg` as Snowflake Scripting procedures / SQL UDFs |
+| `db/snowflake/03_views.sql` | Reporting views (`LEFT JOIN`, `QUALIFY`, `CASE`) + MV |
+| `db/snowflake/04_streams_tasks.sql` | Trigger logic as Streams + Tasks |
+| `db/snowflake/05_stage_pipe.sql` | Stages, file format, `COPY INTO`, Snowpipe |
+| `src/main/resources/sql/reports.sql` | Named reporting queries (Snowflake dialect) |
+| `src/.../dao/ClaimDao.java` | `CALL`s the Snowflake procedures / UDFs |
+| `src/.../etl/NightlyExtract.java` | Nightly `COPY INTO @claims_export` unload |
 
 ## Build
 
@@ -61,18 +66,11 @@ mvn -q compile          # compiles the Java data-access layer
 mvn -q test             # runs unit tests (no database needed)
 ```
 
-Runtime execution needs a live Oracle instance reachable via the `HRTFD_PROD`
-TNS entry and the `ORACLE_APP_PASSWORD` environment variable — not required for
-the migration demo, which works statically over the SQL and Java sources.
+Runtime execution needs a live Snowflake account (`HARTFORD.CLAIMS`, warehouse
+`CLAIMS_WH`) and the `SNOWFLAKE_APP_PASSWORD` environment variable — not required
+for the migration demo, which works statically over the SQL and Java sources.
 
-## Running the migration demo with Devin
+## Deploying the Snowflake objects
 
-Point Devin at this repo and ask it to migrate a slice, e.g.:
-
-> "Migrate `db/oracle/03_views.sql` to Snowflake, writing the result to
-> `db/snowflake/03_views.sql`, and update `docs/MIGRATION.md`."
-
-or
-
-> "Swap the JDBC layer from Oracle to Snowflake and rewrite the queries in
-> `reports.sql`."
+Run `db/snowflake/*.sql` in numeric order, then (once) upload the final Oracle
+extracts to `@claims_stage` and run `scripts/load_stage_to_snowflake.sh`.

@@ -11,12 +11,14 @@ import java.util.Properties;
 /**
  * Builds the application {@link DataSource} from application.properties.
  *
- * <p>MIGRATION NOTE: this factory is hard-wired to the Oracle thin driver and a
- * TNS descriptor. Migrating to Snowflake means swapping the driver, dropping the
- * {@code oracle.net.tns_admin} system property, and using a Snowflake account URL
- * plus warehouse/role. See docs/MIGRATION.md.</p>
+ * <p>Targets Snowflake: the account URL comes from {@code db.url} and the
+ * warehouse / database / schema / role are passed as Snowflake JDBC connection
+ * properties so every pooled connection lands in {@code HARTFORD.CLAIMS} without
+ * an init statement.</p>
  */
 public final class DataSourceFactory {
+
+    static final String PASSWORD_ENV = "SNOWFLAKE_APP_PASSWORD";
 
     private static volatile HikariDataSource INSTANCE;
 
@@ -37,12 +39,6 @@ public final class DataSourceFactory {
     private static HikariDataSource build() {
         Properties props = load("/application.properties");
 
-        // Oracle TNS resolution depends on this JVM system property.
-        String tnsAdmin = props.getProperty("db.tns.admin");
-        if (tnsAdmin != null) {
-            System.setProperty("oracle.net.tns_admin", tnsAdmin);
-        }
-
         HikariConfig cfg = new HikariConfig();
         cfg.setDriverClassName(props.getProperty("db.driver"));
         cfg.setJdbcUrl(props.getProperty("db.url"));
@@ -50,23 +46,32 @@ public final class DataSourceFactory {
         cfg.setPassword(resolvePassword());
         cfg.setMaximumPoolSize(Integer.parseInt(props.getProperty("db.pool.maxSize", "10")));
 
+        addIfPresent(cfg, props, "db.warehouse", "warehouse");
+        addIfPresent(cfg, props, "db.database", "db");
+        addIfPresent(cfg, props, "db.schema", "schema");
+        addIfPresent(cfg, props, "db.role", "role");
+        cfg.addDataSourceProperty("application", "hartford-claims-datastore");
+
         String initSql = props.getProperty("db.pool.connectionInitSql");
         if (initSql != null) {
             cfg.setConnectionInitSql(initSql);
         }
 
-        // Oracle-specific tuning that has no Snowflake equivalent.
-        cfg.addDataSourceProperty("oracle.jdbc.implicitStatementCacheSize", "50");
-        cfg.addDataSourceProperty("defaultRowPrefetch", "500");
-
         return new HikariDataSource(cfg);
     }
 
+    private static void addIfPresent(HikariConfig cfg, Properties props, String key, String dsProp) {
+        String value = props.getProperty(key);
+        if (value != null && !value.isEmpty()) {
+            cfg.addDataSourceProperty(dsProp, value);
+        }
+    }
+
     private static String resolvePassword() {
-        String pw = System.getenv("ORACLE_APP_PASSWORD");
+        String pw = System.getenv(PASSWORD_ENV);
         if (pw == null || pw.isEmpty()) {
             throw new IllegalStateException(
-                "ORACLE_APP_PASSWORD is not set; cannot connect to Oracle.");
+                PASSWORD_ENV + " is not set; cannot connect to Snowflake.");
         }
         return pw;
     }
