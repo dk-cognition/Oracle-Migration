@@ -6,17 +6,27 @@ import com.zaxxer.hikari.HikariDataSource;
 import javax.sql.DataSource;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Properties;
 
 /**
- * Builds the application {@link DataSource} from application.properties.
+ * Builds the application {@link DataSource} from application.properties, pointed
+ * at Snowflake.
  *
- * <p>MIGRATION NOTE: this factory is hard-wired to the Oracle thin driver and a
- * TNS descriptor. Migrating to Snowflake means swapping the driver, dropping the
- * {@code oracle.net.tns_admin} system property, and using a Snowflake account URL
- * plus warehouse/role. See docs/MIGRATION.md.</p>
+ * <p>The JDBC URL is {@code jdbc:snowflake://<account>.snowflakecomputing.com/}
+ * with warehouse, database, schema and role passed as URL parameters, so every
+ * pooled connection lands in the right context without init SQL. Credentials
+ * come from the environment: key-pair auth via {@code SNOWFLAKE_PRIVATE_KEY_FILE}
+ * (preferred) or password auth via {@code SNOWFLAKE_APP_PASSWORD}.</p>
  */
 public final class DataSourceFactory {
+
+    static final String ENV_PRIVATE_KEY_FILE = "SNOWFLAKE_PRIVATE_KEY_FILE";
+    static final String ENV_PRIVATE_KEY_PWD = "SNOWFLAKE_PRIVATE_KEY_PWD";
+    static final String ENV_PASSWORD = "SNOWFLAKE_APP_PASSWORD";
 
     private static volatile HikariDataSource INSTANCE;
 
@@ -37,41 +47,70 @@ public final class DataSourceFactory {
     private static HikariDataSource build() {
         Properties props = load("/application.properties");
 
-        // Oracle TNS resolution depends on this JVM system property.
-        String tnsAdmin = props.getProperty("db.tns.admin");
-        if (tnsAdmin != null) {
-            System.setProperty("oracle.net.tns_admin", tnsAdmin);
-        }
-
         HikariConfig cfg = new HikariConfig();
         cfg.setDriverClassName(props.getProperty("db.driver"));
-        cfg.setJdbcUrl(props.getProperty("db.url"));
+        cfg.setJdbcUrl(buildJdbcUrl(props));
         cfg.setUsername(props.getProperty("db.username"));
-        cfg.setPassword(resolvePassword());
         cfg.setMaximumPoolSize(Integer.parseInt(props.getProperty("db.pool.maxSize", "10")));
-
-        String initSql = props.getProperty("db.pool.connectionInitSql");
-        if (initSql != null) {
-            cfg.setConnectionInitSql(initSql);
-        }
-
-        // Oracle-specific tuning that has no Snowflake equivalent.
-        cfg.addDataSourceProperty("oracle.jdbc.implicitStatementCacheSize", "50");
-        cfg.addDataSourceProperty("defaultRowPrefetch", "500");
-
+        applyCredentials(cfg);
         return new HikariDataSource(cfg);
     }
 
-    private static String resolvePassword() {
-        String pw = System.getenv("ORACLE_APP_PASSWORD");
-        if (pw == null || pw.isEmpty()) {
-            throw new IllegalStateException(
-                "ORACLE_APP_PASSWORD is not set; cannot connect to Oracle.");
+    /**
+     * Returns {@code db.url} if set, otherwise builds
+     * {@code jdbc:snowflake://<db.account>.snowflakecomputing.com/?warehouse=..&db=..&schema=..&role=..}.
+     */
+    public static String buildJdbcUrl(Properties props) {
+        String explicit = props.getProperty("db.url");
+        if (explicit != null && !explicit.isBlank()) {
+            return explicit.trim();
         }
-        return pw;
+        String account = props.getProperty("db.account");
+        if (account == null || account.isBlank()) {
+            throw new IllegalStateException("Either db.url or db.account must be configured.");
+        }
+
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("warehouse", props.getProperty("db.warehouse"));
+        params.put("db", props.getProperty("db.database"));
+        params.put("schema", props.getProperty("db.schema"));
+        params.put("role", props.getProperty("db.role"));
+
+        StringBuilder url = new StringBuilder("jdbc:snowflake://")
+            .append(account.trim())
+            .append(".snowflakecomputing.com/");
+        char sep = '?';
+        for (Map.Entry<String, String> e : params.entrySet()) {
+            String value = e.getValue();
+            if (value != null && !value.isBlank()) {
+                url.append(sep).append(e.getKey()).append('=')
+                   .append(URLEncoder.encode(value.trim(), StandardCharsets.UTF_8));
+                sep = '&';
+            }
+        }
+        return url.toString();
     }
 
-    private static Properties load(String resource) {
+    private static void applyCredentials(HikariConfig cfg) {
+        String keyFile = System.getenv(ENV_PRIVATE_KEY_FILE);
+        if (keyFile != null && !keyFile.isEmpty()) {
+            cfg.addDataSourceProperty("private_key_file", keyFile);
+            String keyPwd = System.getenv(ENV_PRIVATE_KEY_PWD);
+            if (keyPwd != null && !keyPwd.isEmpty()) {
+                cfg.addDataSourceProperty("private_key_file_pwd", keyPwd);
+            }
+            return;
+        }
+        String pw = System.getenv(ENV_PASSWORD);
+        if (pw == null || pw.isEmpty()) {
+            throw new IllegalStateException(
+                "Neither " + ENV_PRIVATE_KEY_FILE + " nor " + ENV_PASSWORD
+                    + " is set; cannot connect to Snowflake.");
+        }
+        cfg.setPassword(pw);
+    }
+
+    public static Properties load(String resource) {
         Properties props = new Properties();
         try (InputStream in = DataSourceFactory.class.getResourceAsStream(resource)) {
             if (in == null) {
