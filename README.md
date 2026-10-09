@@ -35,11 +35,11 @@ Oracle→Snowflake mapping and a suggested migration order.
 
 ```
 db/oracle/            Oracle 19c DDL, PL/SQL, views, seed data (the source system)
-db/snowflake/         Empty target — the migration lands Snowflake artifacts here
+db/snowflake/         Migrated Snowflake DDL, procedures, views, ETL stage
 src/main/java/        Java 11 JDBC data-access layer, reports, nightly ETL
-src/main/resources/   application.properties, tnsnames.ora, externalized SQL
+src/main/resources/   application.properties, externalized SQL
 src/test/java/        Unit tests (no live DB required)
-scripts/              Legacy Oracle flat-file export (to be replaced by COPY INTO)
+scripts/              Nightly COPY INTO @stage unload (Snowflake CLI)
 docs/MIGRATION.md     Oracle → Snowflake migration guide / checklist
 ```
 
@@ -61,9 +61,14 @@ mvn -q compile          # compiles the Java data-access layer
 mvn -q test             # runs unit tests (no database needed)
 ```
 
-Runtime execution needs a live Oracle instance reachable via the `HRTFD_PROD`
-TNS entry and the `ORACLE_APP_PASSWORD` environment variable — not required for
-the migration demo, which works statically over the SQL and Java sources.
+> **Migrated to Snowflake.** The Oracle sources under `db/oracle/` are kept for
+> reference; everything else now targets Snowflake. See
+> [`docs/MIGRATION.md` section 10](docs/MIGRATION.md#10-migration-status--decisions).
+
+Runtime execution needs a Snowflake account (`db.account` etc. in
+`application.properties`) with `db/snowflake/*.sql` deployed, and either
+`SNOWFLAKE_PRIVATE_KEY_FILE` (key-pair auth) or `SNOWFLAKE_APP_PASSWORD` set.
+Unit tests need no database.
 
 ## Running the migration demo with Devin
 

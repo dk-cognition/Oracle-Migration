@@ -2,37 +2,56 @@
 # ============================================================================
 # export_oracle_to_stage.sh
 #
-# Legacy nightly extract: dumps Oracle tables to pipe-delimited flat files with
-# SQL*Plus, then hands them off to the warehouse feed. This is the pattern the
-# Snowflake migration replaces with COPY INTO from a cloud stage / Snowpipe.
+# Nightly full-table extract, now Snowflake-native: unloads each table to a
+# Snowflake stage with COPY INTO (no SQL*Plus spool, no flat-file SFTP hop).
+# Stage and file format are created by db/snowflake/05_etl_stage.sql.
 #
-# Usage: ORACLE_APP_PASSWORD=*** ./export_oracle_to_stage.sh /path/to/outdir
+# Usage: ./export_oracle_to_stage.sh [@stage]
+#
+# Environment:
+#   SNOWFLAKE_CONNECTION  Snowflake CLI connection name (default: hartford_claims),
+#                         defined in ~/.snowflake/config.toml
+#   SNOWFLAKE_SCHEMA      schema to read from (default: HARTFORD.CLAIMS)
+#   FILE_FORMAT           named file format (default: psv_format)
+#   RUN_DATE              partition folder, YYYY-MM-DD (default: today, UTC)
+#   DRY_RUN=1             print the SQL instead of executing it
 # ============================================================================
 set -euo pipefail
 
-OUT_DIR="${1:-./extract}"
-DB_USER="${DB_USER:-hartford_app}"
-DB_TNS="${DB_TNS:-HRTFD_PROD}"
-: "${ORACLE_APP_PASSWORD:?Set ORACLE_APP_PASSWORD}"
+STAGE="${1:-@claims_extract_stage}"
+STAGE="${STAGE%/}"
+CONNECTION="${SNOWFLAKE_CONNECTION:-hartford_claims}"
+SCHEMA="${SNOWFLAKE_SCHEMA:-HARTFORD.CLAIMS}"
+FILE_FORMAT="${FILE_FORMAT:-psv_format}"
+RUN_DATE="${RUN_DATE:-$(date -u +%F)}"
 
-mkdir -p "${OUT_DIR}"
+if [[ ! "${STAGE}" =~ ^@[A-Za-z0-9_\$./~-]+$ ]]; then
+  echo "Invalid stage reference: ${STAGE}" >&2
+  exit 2
+fi
+if [[ ! "${SCHEMA}" =~ ^[A-Za-z0-9_\$.]+$ || ! "${FILE_FORMAT}" =~ ^[A-Za-z0-9_\$.]+$ ]]; then
+  echo "Invalid schema or file format name" >&2
+  exit 2
+fi
+if [[ ! "${RUN_DATE}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  echo "RUN_DATE must be YYYY-MM-DD" >&2
+  exit 2
+fi
 
 TABLES=(customer agent policy claim claim_payment)
 
+SQL="USE SCHEMA ${SCHEMA};"
 for t in "${TABLES[@]}"; do
-  echo "Exporting hartford.${t} ..."
-  sqlplus -s "${DB_USER}/${ORACLE_APP_PASSWORD}@${DB_TNS}" <<SQL
-    SET PAGESIZE 0
-    SET FEEDBACK OFF
-    SET COLSEP '|'
-    SET LINESIZE 32767
-    SET TRIMSPOOL ON
-    SPOOL ${OUT_DIR}/${t}.psv
-    SELECT * FROM hartford.${t};
-    SPOOL OFF
-    EXIT
-SQL
+  SQL+=$'\n'"COPY INTO ${STAGE}/${t}/${RUN_DATE}/${t}_ FROM ${t} FILE_FORMAT = (FORMAT_NAME = '${FILE_FORMAT}') HEADER = FALSE OVERWRITE = TRUE;"
 done
 
-echo "Done. Flat files in ${OUT_DIR}"
-echo "TODO (migration): replace this with 'COPY INTO @claims_stage/... FROM ...'"
+if [[ "${DRY_RUN:-0}" == "1" ]]; then
+  echo "${SQL}"
+  exit 0
+fi
+
+command -v snow >/dev/null 2>&1 || { echo "Snowflake CLI ('snow') not found on PATH" >&2; exit 1; }
+
+echo "Unloading ${#TABLES[@]} tables to ${STAGE} (run date ${RUN_DATE}) ..."
+snow sql --connection "${CONNECTION}" --query "${SQL}"
+echo "Done. Files are under ${STAGE}/<table>/${RUN_DATE}/"
