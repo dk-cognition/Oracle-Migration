@@ -1,16 +1,16 @@
-# Snowflake target (to be built during the migration)
+# Snowflake target
 
-This directory is intentionally empty except for this note. It is the landing
-zone for the migrated, Snowflake-native artifacts that the demo produces:
+Snowflake-native artifacts produced by the Oracle → Snowflake migration. Run in
+order against an account where you can create `HARTFORD.CLAIMS`:
 
 ```
 db/snowflake/
-├── 01_schema.sql       -- DDL rewritten for Snowflake (NUMBER/TIMESTAMP, IDENTITY, sequences)
-├── 02_procedures.sql   -- claims_pkg re-implemented as Snowflake Scripting procedures
-├── 03_views.sql        -- views with ANSI joins, QUALIFY, CASE (no (+)/ROWNUM/DECODE)
-├── 04_streams_tasks.sql-- trigger logic re-expressed as Streams + Tasks
-└── 04_seed_data.sql    -- seed data using CURRENT_TIMESTAMP / TO_DATE
+├── 01_schema.sql       -- tables, sequences, AUTOINCREMENT/DEFAULT keys (no tablespaces/indexes)
+├── 02_procedures.sql   -- claims_pkg as open_claim / post_payment procs + loss_ratio, fn_customer_full_name UDFs
+├── 03_views.sql        -- views with ANSI joins, CASE, LIMIT, recursive-CTE org chart, mv_daily_paid
+├── 04_seed_data.sql    -- seed data (TIMESTAMP_NTZ literals, claims opened via open_claim)
+└── 05_etl_stage.sql    -- file format + stage for COPY INTO unloads, Snowpipe template
 ```
 
 See [`../../docs/MIGRATION.md`](../../docs/MIGRATION.md) for the mapping from
-each Oracle construct to its Snowflake equivalent.
+each Oracle construct to its Snowflake equivalent and the cutover notes.

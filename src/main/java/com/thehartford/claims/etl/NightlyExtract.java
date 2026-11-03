@@ -4,27 +4,30 @@ import com.thehartford.claims.config.DataSourceFactory;
 import com.thehartford.claims.dao.DataAccessException;
 
 import javax.sql.DataSource;
-import java.io.BufferedWriter;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.regex.Pattern;
 
 /**
- * Nightly batch that extracts recently changed claims to a pipe-delimited file
- * for the downstream data warehouse feed.
+ * Nightly batch that publishes recently reported claims to the downstream
+ * warehouse feed.
  *
- * <p>MIGRATION NOTE: today this reads from Oracle and writes a flat file that an
- * external process SFTPs to the warehouse. The Snowflake target replaces this
- * whole pattern with {@code COPY INTO @stage} (or Snowpipe) directly against a
- * cloud stage, eliminating the flat-file hop. This class also uses Oracle
- * {@code TRUNC(SYSDATE)} and {@code TO_CHAR} which do not port verbatim.</p>
+ * <p>Replaces the Oracle-era flat-file extract (JDBC rows written to a local
+ * .psv, then SFTP'd): Snowflake unloads the rows itself with
+ * {@code COPY INTO @stage}, so nothing is written on the application host. The
+ * stage and file format are created by db/snowflake/05_etl_stage.sql.</p>
  */
 public class NightlyExtract {
+
+    static final String DEFAULT_STAGE = "@claims_extract_stage/claims";
+    static final String FILE_FORMAT = "claims_psv_ff";
+
+    // Stage paths cannot be bound as parameters, so restrict them to safe characters.
+    private static final Pattern STAGE_PATH = Pattern.compile("@[A-Za-z0-9_$.~/-]+");
 
     private final DataSource dataSource;
 
@@ -36,49 +39,47 @@ public class NightlyExtract {
         this.dataSource = dataSource;
     }
 
-    public int extractChangedClaims(Path outputFile) {
-        // Oracle-specific: TRUNC(SYSDATE) - 1 => "since midnight yesterday".
-        String sql =
-            "SELECT cl.claim_id, cl.claim_number, cl.policy_id, "
-          + "       TO_CHAR(cl.reported_date, 'YYYY-MM-DD HH24:MI:SS') AS reported, "
-          + "       cl.status, cl.reserve_amount, cl.paid_amount "
-          + "  FROM hartford.claim cl "
-          + " WHERE cl.reported_date >= TRUNC(SYSDATE) - 1 "
-          + " ORDER BY cl.claim_id";
-
-        int rowCount = 0;
+    /**
+     * Unloads claims reported since midnight yesterday to
+     * {@code <stage>/<runDate>/claims_*.psv}. Returns the number of rows unloaded.
+     */
+    public long extractChangedClaims(String stage, LocalDate runDate) {
+        String sql = buildCopySql(stage, runDate);
+        long rows = 0;
         try (Connection conn = dataSource.getConnection();
              Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery(sql);
-             BufferedWriter writer = Files.newBufferedWriter(outputFile)) {
-
-            ResultSetMetaData md = rs.getMetaData();
-            int cols = md.getColumnCount();
-
+             ResultSet rs = st.executeQuery(sql)) {
             while (rs.next()) {
-                StringBuilder line = new StringBuilder();
-                for (int i = 1; i <= cols; i++) {
-                    if (i > 1) {
-                        line.append('|');
-                    }
-                    String v = rs.getString(i);
-                    line.append(v == null ? "" : v);
-                }
-                writer.write(line.toString());
-                writer.newLine();
-                rowCount++;
+                rows += rs.getLong("rows_unloaded");
             }
         } catch (SQLException e) {
             throw new DataAccessException("Nightly claim extract failed", e);
-        } catch (IOException e) {
-            throw new RuntimeException("Failed writing extract file " + outputFile, e);
         }
-        return rowCount;
+        return rows;
+    }
+
+    static String buildCopySql(String stage, LocalDate runDate) {
+        String base = stage.endsWith("/") ? stage.substring(0, stage.length() - 1) : stage;
+        if (!STAGE_PATH.matcher(base).matches()) {
+            throw new IllegalArgumentException("Invalid stage location: " + stage);
+        }
+        return "COPY INTO " + base + "/" + runDate + "/claims_ "
+             + "FROM ("
+             + "SELECT cl.claim_id, cl.claim_number, cl.policy_id, "
+             + "       TO_VARCHAR(cl.reported_date, 'YYYY-MM-DD HH24:MI:SS') AS reported, "
+             + "       cl.status, cl.reserve_amount, cl.paid_amount "
+             + "  FROM claim cl "
+             + " WHERE cl.reported_date >= DATEADD('day', -1, CURRENT_DATE()) "
+             + " ORDER BY cl.claim_id"
+             + ") "
+             + "FILE_FORMAT = (FORMAT_NAME = '" + FILE_FORMAT + "') "
+             + "HEADER = FALSE OVERWRITE = TRUE";
     }
 
     public static void main(String[] args) {
-        Path out = Path.of(args.length > 0 ? args[0] : "claims_extract.psv");
-        int n = new NightlyExtract().extractChangedClaims(out);
-        System.out.println("Wrote " + n + " changed claim rows to " + out);
+        String stage = args.length > 0 ? args[0] : DEFAULT_STAGE;
+        LocalDate runDate = args.length > 1 ? LocalDate.parse(args[1]) : LocalDate.now(ZoneOffset.UTC);
+        long n = new NightlyExtract().extractChangedClaims(stage, runDate);
+        System.out.println("Unloaded " + n + " changed claim rows to " + stage + "/" + runDate + "/");
     }
 }
