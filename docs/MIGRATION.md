@@ -93,17 +93,62 @@ Files to touch: `DataSourceFactory`, `ClaimDao` (all `CallableStatement` calls),
 
 ## 8. ETL / batch
 
-- `NightlyExtract` + `export_oracle_to_stage.sh` produce pipe-delimited flat
-  files SFTP'd to the warehouse. Replace with `COPY INTO @stage` /
+- `NightlyExtract` + `export_oracle_to_stage.sh` (now `unload_to_stage.sh`)
+  produced pipe-delimited flat files SFTP'd to the warehouse. Replace with `COPY INTO @stage` /
   **Snowpipe** for continuous load, eliminating the flat-file hop.
 - `TRUNC(SYSDATE) - 1` window logic → `DATEADD` / Streams for CDC.
 
 ## 9. Suggested migration order (demo script)
 
-1. Translate DDL (`db/oracle/01_schema.sql` → `db/snowflake/01_schema.sql`).
-2. Rewrite views (`03_views.sql`) — remove `(+)`, `ROWNUM`.
-3. Re-implement `claims_pkg` as Snowflake procedures.
-4. Convert reporting SQL in `src/main/resources/sql/reports.sql`.
-5. Swap the JDBC driver/config and rework `CallableStatement` calls.
-6. Replace the flat-file ETL with `COPY INTO`/Snowpipe.
-7. Re-point `application.properties` to the Snowflake datasource block.
+- [x] 1. Translate DDL (`db/oracle/01_schema.sql` → `db/snowflake/01_schema.sql`).
+  `VARCHAR2`/`CLOB` → `VARCHAR`, `DATE` → `TIMESTAMP_NTZ`, `customer_id` →
+  `DEFAULT seq_customer_id.NEXTVAL`, `policy_id`/`payment_id` → `AUTOINCREMENT`,
+  `updated_ts` → `DEFAULT CURRENT_TIMESTAMP()`. Tablespaces, all indexes, and
+  `CHECK` constraints (unsupported) dropped; PK/UK/FK kept as metadata.
+  Seed data ported to `db/snowflake/04_seed_data.sql`.
+- [x] 2. Rewrite views (`03_views.sql`) — remove `(+)`, `ROWNUM`.
+  → `db/snowflake/03_views.sql`: ANSI `LEFT JOIN`, `CASE`, `COALESCE`,
+  `LIMIT 10`, `mv_daily_paid` without `REFRESH FAST ON COMMIT`, plus
+  `vw_agent_org_chart` (`CONNECT BY` → `WITH RECURSIVE`).
+- [x] 3. Re-implement `claims_pkg` as Snowflake procedures.
+  → `db/snowflake/02_procedures.sql`: `open_claim` / `post_payment`
+  (Snowflake Scripting procedures), `loss_ratio` / `fn_customer_full_name`
+  (SQL UDFs), `claims_default_reserve()` replaces `g_default_reserve`.
+  `RAISE_APPLICATION_ERROR` → named `EXCEPTION`s; the claim id is taken from
+  `seq_claim_id.NEXTVAL` up front instead of `RETURNING ... INTO`.
+- [x] 4. Convert reporting SQL in `src/main/resources/sql/reports.sql`.
+  `SqlLibraryTest` now asserts `WITH RECURSIVE` and the absence of Oracle-isms.
+- [x] 5. Swap the JDBC driver/config and rework `CallableStatement` calls.
+  `ojdbc11` → `snowflake-jdbc`; `tnsnames.ora` deleted; `DataSourceFactory`
+  passes warehouse/db/schema/role as connection properties and supports
+  key-pair (`SNOWFLAKE_PRIVATE_KEY_FILE` [+ `_PWD`]) or password
+  (`SNOWFLAKE_APP_PASSWORD`) auth. `ClaimDao` uses `CALL open_claim(...)`,
+  `CALL post_payment(...)`, `SELECT loss_ratio(?)`; `CustomerDao` takes
+  `SELECT seq_customer_id.NEXTVAL` and inserts it explicitly.
+- [x] 6. Replace the flat-file ETL with `COPY INTO`/Snowpipe.
+  `NightlyExtract` unloads changed claims with `COPY INTO @claims_extract_stage/<date>/`;
+  `scripts/export_oracle_to_stage.sh` → `scripts/unload_to_stage.sh` (`snow sql`,
+  `COPY INTO` per table, `DRY_RUN=1` to print). Stage + file format in
+  `db/snowflake/05_etl_stage.sql`; consumers ingest with Snowpipe (template there).
+- [x] 7. Re-point `application.properties` to the Snowflake datasource block.
+
+### Cutover notes / remaining work
+
+- **Snowpipe** needs a real external stage + storage integration on the
+  consumer side; `05_etl_stage.sql` has the `CREATE PIPE ... AUTO_INGEST`
+  template but no live pipe is created.
+- **`CHECK` constraints** (claim/policy status, amounts ≥ 0) are not enforced by
+  Snowflake. `post_payment` enforces payment rules; add data-quality checks for
+  direct writers.
+- **Sequence gaps/order:** Snowflake sequences hand out ids in blocks and are
+  not guaranteed monotonic across sessions (observed `100203` then `100004`).
+  Nothing in the app assumes gap-free or ordered ids; `peekNextId` is advisory.
+- **JDBC driver settings** in `DataSourceFactory`: `JDBC_QUERY_RESULT_FORMAT=JSON`
+  (Arrow needs `--add-opens java.base/java.nio` on JDK 17+),
+  `CLIENT_RESULT_COLUMN_CASE_INSENSITIVE=true` (DAOs read lower-case column
+  labels), and BouncyCastle enabled for encrypted private keys.
+- **Seed dates** are 2024–2025, so date-windowed views/reports
+  (`vw_active_policies`, `monthly_premium`) return no rows once those policies
+  expire; that is the data, not the SQL.
+- `updated_ts` has no on-update trigger; `customer_upsert` sets it explicitly.
+  Add a Stream + Task if other writers need it maintained.

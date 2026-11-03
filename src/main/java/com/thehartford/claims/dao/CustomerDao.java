@@ -13,13 +13,13 @@ import java.sql.Statement;
 /**
  * Data access for customers.
  *
- * <p>MIGRATION NOTE: {@link #insert} relies on {@code seq_customer_id.NEXTVAL}
- * being applied by the {@code trg_customer_biu} row trigger, then reads the
- * generated key back with Oracle's {@code getGeneratedKeys()} using ROWID.
- * Snowflake has neither row triggers nor ROWID; use an IDENTITY/AUTOINCREMENT
- * column or an explicit sequence in the INSERT. See docs/MIGRATION.md.</p>
+ * <p>Snowflake has no row triggers, ROWID, or {@code getGeneratedKeys()}, so
+ * {@link #insert} draws the id from {@code seq_customer_id} first and inserts
+ * it explicitly (the column also defaults to the sequence for other writers).</p>
  */
 public class CustomerDao {
+
+    private static final String NEXT_ID = "SELECT seq_customer_id.NEXTVAL";
 
     private final DataSource dataSource;
     private final SqlLibrary sql;
@@ -33,29 +33,26 @@ public class CustomerDao {
         this.sql = SqlLibrary.fromResource("/sql/reports.sql");
     }
 
-    /** Inserts a customer, letting the Oracle trigger assign the id from a sequence. */
+    /** Inserts a customer and returns its id, drawn from seq_customer_id. */
     public long insert(String firstName, String lastName, String email) {
         String insert =
-            "INSERT INTO hartford.customer (first_name, last_name, email) VALUES (?, ?, ?)";
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps =
-                 conn.prepareStatement(insert, new String[] {"CUSTOMER_ID"})) {
-            ps.setString(1, firstName);
-            ps.setString(2, lastName);
-            ps.setString(3, email);
-            ps.executeUpdate();
-            try (ResultSet keys = ps.getGeneratedKeys()) {
-                if (keys.next()) {
-                    return keys.getLong(1);
-                }
+            "INSERT INTO customer (customer_id, first_name, last_name, email) VALUES (?, ?, ?, ?)";
+        try (Connection conn = dataSource.getConnection()) {
+            long id = nextId(conn);
+            try (PreparedStatement ps = conn.prepareStatement(insert)) {
+                ps.setLong(1, id);
+                ps.setString(2, firstName);
+                ps.setString(3, lastName);
+                ps.setString(4, email);
+                ps.executeUpdate();
             }
-            throw new DataAccessException("No generated key returned for customer insert", null);
+            return id;
         } catch (SQLException e) {
             throw new DataAccessException("insert customer failed", e);
         }
     }
 
-    /** Upsert via the Oracle MERGE ... USING dual statement in reports.sql. */
+    /** Upsert via the Snowflake MERGE statement in reports.sql. */
     public void upsert(long customerId, String firstName, String lastName, String email) {
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql.get("customer_upsert"))) {
@@ -69,15 +66,22 @@ public class CustomerDao {
         }
     }
 
-    /** Reads the next customer id straight from the Oracle sequence via DUAL. */
+    /** Draws the next customer id from the sequence (consumes the value, as in Oracle). */
     public long peekNextId() {
-        String q = "SELECT hartford.seq_customer_id.NEXTVAL FROM dual";
-        try (Connection conn = dataSource.getConnection();
-             Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery(q)) {
-            return rs.next() ? rs.getLong(1) : -1L;
+        try (Connection conn = dataSource.getConnection()) {
+            return nextId(conn);
         } catch (SQLException e) {
             throw new DataAccessException("peekNextId failed", e);
         }
+    }
+
+    private static long nextId(Connection conn) throws SQLException {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(NEXT_ID)) {
+            if (rs.next()) {
+                return rs.getLong(1);
+            }
+        }
+        throw new SQLException("seq_customer_id returned no value");
     }
 }

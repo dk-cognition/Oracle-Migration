@@ -1,8 +1,8 @@
 # Hartford Claims Data Store
 
 > **Demo repository.** Fictional Property & Casualty (P&C) policy administration
-> and claims-processing data store for *The Hartford*, currently backed by
-> **Oracle 19c**. It exists to showcase an **Oracle → Snowflake migration** with
+> and claims-processing data store for *The Hartford*, originally backed by
+> **Oracle 19c** and now migrated to **Snowflake**. It exists to showcase an **Oracle → Snowflake migration** with
 > Devin. All data, hostnames, and identifiers are synthetic.
 
 ## What this system does
@@ -35,11 +35,11 @@ Oracle→Snowflake mapping and a suggested migration order.
 
 ```
 db/oracle/            Oracle 19c DDL, PL/SQL, views, seed data (the source system)
-db/snowflake/         Empty target — the migration lands Snowflake artifacts here
+db/snowflake/         Snowflake DDL, procedures/UDFs, views, seed data, ETL stage
 src/main/java/        Java 11 JDBC data-access layer, reports, nightly ETL
-src/main/resources/   application.properties, tnsnames.ora, externalized SQL
+src/main/resources/   application.properties (Snowflake), externalized SQL
 src/test/java/        Unit tests (no live DB required)
-scripts/              Legacy Oracle flat-file export (to be replaced by COPY INTO)
+scripts/              unload_to_stage.sh — COPY INTO stage unload (snow CLI)
 docs/MIGRATION.md     Oracle → Snowflake migration guide / checklist
 ```
 
@@ -61,9 +61,10 @@ mvn -q compile          # compiles the Java data-access layer
 mvn -q test             # runs unit tests (no database needed)
 ```
 
-Runtime execution needs a live Oracle instance reachable via the `HRTFD_PROD`
-TNS entry and the `ORACLE_APP_PASSWORD` environment variable — not required for
-the migration demo, which works statically over the SQL and Java sources.
+Runtime execution needs a Snowflake account with `db/snowflake/01`–`05` applied,
+the account/warehouse/database/schema/role in `application.properties`, and
+either `SNOWFLAKE_PRIVATE_KEY_FILE` (+ optional `SNOWFLAKE_PRIVATE_KEY_FILE_PWD`)
+or `SNOWFLAKE_APP_PASSWORD` in the environment. Unit tests need no database.
 
 ## Running the migration demo with Devin
 
